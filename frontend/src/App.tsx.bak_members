@@ -1,0 +1,51 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useAuthStore } from './context/authStore'
+import LoginPage from './pages/LoginPage'
+import AppLayout from './components/AppLayout'
+import EvaluatePage from './pages/EvaluatePage'
+import DashboardPage from './pages/DashboardPage'
+import CasesPage from './pages/CasesPage'
+import QueuePage from './pages/QueuePage'
+import BatchJobsPage from "./pages/BatchJobsPage"
+import ReinsurancePage from './pages/ReinsurancePage'
+import UserManagementPage from './pages/UserManagementPage'
+import ProductConfigPage from './pages/ProductConfigPage'
+import RuleConfigPage from './pages/RuleConfigPage'
+import SystemConfigPage from './pages/SystemConfigPage'
+import TenantManagementPage from './pages/TenantManagementPage'
+import OutputInterfacePage from './pages/OutputInterfacePage'
+import AuditLogPage from './pages/AuditLogPage'
+import DebitScalePage from './pages/DebitScalePage'
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((s) => s.user)
+  return user ? <>{children}</> : <Navigate to="/login" replace />
+}
+
+export default function App() {
+  const user = useAuthStore((s) => s.user)
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
+        <Route path="/" element={<RequireAuth><AppLayout /></RequireAuth>}>
+          <Route index element={<DashboardPage />} />
+          <Route path="evaluate"       element={<EvaluatePage />} />
+          <Route path="queue"          element={<QueuePage />} />
+          <Route path="cases"          element={<CasesPage />} />
+          <Route path="batch"          element={<BatchJobsPage />} />
+          <Route path="reinsurance"    element={<ReinsurancePage />} />
+          <Route path="users"          element={<UserManagementPage />} />
+          <Route path="product-config" element={<ProductConfigPage />} />
+          <Route path="rule-config"    element={<RuleConfigPage />} />
+          <Route path="system-config"  element={<SystemConfigPage />} />
+          <Route path="/scale-builder" element={<DebitScalePage/>}/>
+          <Route path="tenants" element={<TenantManagementPage />} />
+          <Route path="output-interface" element={<OutputInterfacePage />} />
+          <Route path="audit" element={<AuditLogPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}

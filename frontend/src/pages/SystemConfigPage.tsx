@@ -1,0 +1,2246 @@
+import { useEffect, useRef, useState } from 'react'
+import {
+  Table, Input, Button, Spin, message, Tag,
+  Tabs, Switch, Form, Select, Divider, InputNumber,
+  Upload, Modal, Popconfirm, Space,
+} from 'antd'
+import {
+  SaveOutlined, ReloadOutlined, SettingOutlined,
+  MailOutlined, BellOutlined,
+  UploadOutlined, PlusOutlined, DeleteOutlined,
+  KeyOutlined, WarningOutlined, EnvironmentOutlined,
+  DollarOutlined, FileTextOutlined, EditOutlined,
+  CaretRightOutlined,
+} from '@ant-design/icons'
+import { api } from '../api/client'
+import PhysicianRegistryTab from './PhysicianRegistryTab'
+import { GSTModalConfigTab } from './GSTModalConfigTab'
+
+const { Option } = Select
+const { TextArea } = Input
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+interface SysConfig { config_key: string; config_value: string; description?: string }
+interface StateCode { id?: number; state_code: string; state_name?: string; is_active: boolean }
+interface LetterTemplate {
+  id: string; template_name: string; outcome: string; is_active: boolean; version: number
+  header_company_name?: string; header_tagline?: string
+  contact_email?: string; contact_phone?: string
+  body_text?: string; next_steps?: string[]; footer_text?: string
+  created_at?: string; updated_at?: string
+}
+interface RatedProduct { product_code: string; rate_count: number }
+interface Rate {
+  id?: number; product_code: string; gender: string; tobacco_status: string
+  age_min: number; age_max: number; term_years?: number; risk_class: string
+  table_rating: number; rate_per_thou: number; flat_extra_rate: number
+  rate_label?: string; effective_date?: string; expiry_date?: string
+}
+interface ErrorCode { id?: number; code: string; category: string; severity: string; message: string; resolution?: string }
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+const CURRENCIES: Record<string, [string, string]> = {
+  USD: ['$',   'US Dollar'],       EUR: ['€',   'Euro'],
+  GBP: ['£',   'British Pound'],   INR: ['₹',   'Indian Rupee'],
+  CAD: ['CA$', 'Canadian Dollar'], AUD: ['A$',  'Australian Dollar'],
+  SGD: ['S$',  'Singapore Dollar'],AED: ['AED', 'UAE Dirham'],
+  JPY: ['¥',   'Japanese Yen'],    CHF: ['CHF', 'Swiss Franc'],
+  ZAR: ['R',   'South African Rand'],
+}
+const RISK_CLASSES  = ['STANDARD','PREFERRED','PREFERRED_PLUS','STANDARD_PLUS','SUBSTANDARD']
+const TABLE_RATINGS = [0,2,4,6,8,10,12,14,16]
+const DATE_FORMATS  = ['DD/MM/YYYY','DD-MMM-YYYY','MM/DD/YYYY','YYYY-MM-DD']
+const TIMEZONES     = ['Asia/Kolkata','UTC','America/New_York','America/Chicago','America/Los_Angeles','Europe/London']
+const PREM_FREQS    = ['ANNUAL','SEMI_ANNUAL','QUARTERLY','MONTHLY']
+
+// ── Styles ─────────────────────────────────────────────────────────────────────
+const card: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.02)',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 10, padding: '20px 24px', marginBottom: 16,
+}
+const secTitle: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: '#6b7280',
+  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16,
+}
+const MS = {
+  content: { background: '#0d1521', border: '1px solid rgba(255,255,255,0.09)' },
+  header:  { background: '#0d1521' },
+  footer:  { background: '#0d1521' },
+}
+
+// ── Config Row helper ──────────────────────────────────────────────────────────
+function ConfigRow({ cfgKey, label, hint, configs, onSave, mono = false }: {
+  cfgKey: string; label: string; hint?: string
+  configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void>; mono?: boolean
+}) {
+  const [val, setVal] = useState(configs.find(c => c.config_key === cfgKey)?.config_value || '')
+  useEffect(() => {
+    const f = configs.find(c => c.config_key === cfgKey)
+    if (f) setVal(f.config_value)
+  }, [configs, cfgKey])
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ width:240, flexShrink:0 }}>
+        <div style={{ fontSize:13, color:'#e2e8f0' }}>{label}</div>
+        {hint && <div style={{ fontSize:11, color:'#6b7280' }}>{hint}</div>}
+      </div>
+      <Input value={val} onChange={e => setVal(e.target.value)}
+        style={{ flex:1, fontFamily: mono ? 'var(--font-mono, monospace)' : undefined }}/>
+      <Button size="small" icon={<SaveOutlined/>} onClick={() => onSave(cfgKey, val)}
+        style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>Save</Button>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 1 — General
+// ══════════════════════════════════════════════════════════════════════════════
+function GeneralTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
+  const [form] = Form.useForm()
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const vals: Record<string, any> = {}
+    for (const c of configs) vals[c.config_key] = c.config_value
+    form.setFieldsValue(vals)
+  }, [configs])
+
+  const saveAll = async () => {
+    setSaving(true)
+    try {
+      const v = form.getFieldsValue()
+      await Promise.all(Object.entries(v).map(([k, val]) => onSave(k, String(val ?? ''))))
+      message.success('General settings saved')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <div style={card}>
+        <div style={secTitle}>Platform Identity</div>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+            <Form.Item name="platform_name" label="Platform Name">
+              <Input placeholder="UW Platform"/>
+            </Form.Item>
+            <Form.Item name="tenant_name" label="Carrier / Tenant Name">
+              <Input placeholder="Demo Carrier"/>
+            </Form.Item>
+            <Form.Item name="date_format" label="Date Format">
+              <Select>{DATE_FORMATS.map(f => <Option key={f} value={f}>{f}</Option>)}</Select>
+            </Form.Item>
+            <Form.Item name="timezone" label="Timezone">
+              <Select>{TIMEZONES.map(t => <Option key={t} value={t}>{t}</Option>)}</Select>
+            </Form.Item>
+            <Form.Item name="sla_default_hours" label="Default SLA (hours)">
+              <InputNumber min={1} max={720} style={{ width:'100%' }} placeholder="48"/>
+            </Form.Item>
+            <Form.Item name="premium_frequency" label="Default Premium Frequency">
+              <Select>{PREM_FREQS.map(f => <Option key={f} value={f}>{f.replace('_',' ')}</Option>)}</Select>
+            </Form.Item>
+
+          </div>
+        </Form>
+      </div>
+
+      {/* UW Thresholds info — moved to product level */}
+      <div style={{ ...card, borderColor:'rgba(251,191,36,0.2)', background:'rgba(251,191,36,0.04)' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
+          <span style={{ fontSize:18, marginTop:2 }}>💡</span>
+          <div>
+            <div style={{ fontSize:13, fontWeight:600, color:'#fbbf24', marginBottom:4 }}>
+              UW Thresholds are configured per product
+            </div>
+            <div style={{ fontSize:12, color:'#9ca3af', lineHeight:1.7 }}>
+              STP threshold, refer threshold, decline threshold, max income multiple and RI retention
+              are set per product — not globally — because each product has different risk tolerance.
+              Configure them in <strong style={{ color:'#e2e8f0' }}>Product Configuration → Decision Thresholds</strong>.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={saveAll} size="large">
+        Save General Settings
+      </Button>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 2 — Currency
+// ══════════════════════════════════════════════════════════════════════════════
+function CurrencyTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
+  const [form] = Form.useForm()
+  const [selCode, setSelCode] = useState('INR')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const code = configs.find(c => c.config_key === 'currency_code')?.config_value || 'INR'
+    const sym  = configs.find(c => c.config_key === 'currency_symbol')?.config_value || '₹'
+    const name = configs.find(c => c.config_key === 'currency_name')?.config_value || 'Indian Rupee'
+    setSelCode(code)
+    form.setFieldsValue({ currency_code: code, currency_symbol: sym, currency_name: name })
+  }, [configs])
+
+  const handleCodeChange = (code: string) => {
+    setSelCode(code)
+    const [sym, name] = CURRENCIES[code] || ['', '']
+    form.setFieldsValue({ currency_code: code, currency_symbol: sym, currency_name: name })
+  }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const v = form.getFieldsValue()
+      await onSave('currency_code',   v.currency_code)
+      await onSave('currency_symbol', v.currency_symbol)
+      await onSave('currency_name',   v.currency_name)
+      message.success(`Currency saved: ${v.currency_code} (${v.currency_symbol})`)
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>
+        Set the currency for all premium and face amount displays.
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Currency Settings</div>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <Form.Item name="currency_code" label="Currency">
+            <Select onChange={handleCodeChange} showSearch>
+              {Object.entries(CURRENCIES).map(([code, [sym, name]]) => (
+                <Option key={code} value={code}>{code} — {name} ({sym})</Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <Form.Item name="currency_code" label="ISO Code">
+              <Input maxLength={3} style={{ fontFamily:'var(--font-mono, monospace)', textTransform:'uppercase' }}/>
+            </Form.Item>
+            <Form.Item name="currency_symbol" label="Symbol">
+              <Input maxLength={5} style={{ fontFamily:'var(--font-mono, monospace)', fontSize:16 }}/>
+            </Form.Item>
+            <Form.Item name="currency_name" label="Name" help="Full currency name displayed in reports">
+              <Input placeholder="e.g. Indian Rupee"/>
+            </Form.Item>
+          </div>
+          {selCode && CURRENCIES[selCode] && (
+            <div style={{ background:'rgba(0,212,170,0.05)', border:'1px solid rgba(0,212,170,0.15)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
+              <span style={{ fontSize:13, color:'#9ca3af' }}>Preview: </span>
+              <span style={{ fontSize:15, fontWeight:600, color:'#00d4aa' }}>
+                {CURRENCIES[selCode][0]}1,00,000
+              </span>
+              <span style={{ fontSize:12, color:'#6b7280', marginLeft:8 }}>{CURRENCIES[selCode][1]}</span>
+            </div>
+          )}
+          <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={save} block>
+            Save Currency
+          </Button>
+        </Form>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 3 — Rate Tables
+// ══════════════════════════════════════════════════════════════════════════════
+function RateTablesTab() {
+  const [products, setProducts]     = useState<RatedProduct[]>([])
+  const [rates, setRates]           = useState<Rate[]>([])
+  const [selProd, setSelProd]       = useState('')
+  const [genderF, setGenderF]       = useState('ALL')
+  const [tobF, setTobF]             = useState('ALL')
+  const [classF, setClassF]         = useState('ALL')
+  const [loading, setLoading]       = useState(false)
+  const [addForm]                   = Form.useForm()
+  const [adding, setAdding]         = useState(false)
+
+  const loadProducts = async () => {
+    setLoading(true)
+    try { const r = await api.get('/system/rates/products'); setProducts(Array.isArray(r.data) ? r.data : r.data?.products || []) }
+    catch { setProducts([]) }
+    finally { setLoading(false) }
+  }
+
+  const loadRates = async (prod: string) => {
+    try {
+      const r = await api.get('/system/rates', { params: { product_code: prod } })
+      setRates(Array.isArray(r.data) ? r.data : r.data?.rates || [])
+    } catch { setRates([]) }
+  }
+
+  useEffect(() => { loadProducts() }, [])
+  useEffect(() => { if (selProd) loadRates(selProd) }, [selProd])
+
+  const filtered = rates.filter(r =>
+    (genderF === 'ALL' || r.gender === genderF) &&
+    (tobF    === 'ALL' || r.tobacco_status === tobF) &&
+    (classF  === 'ALL' || r.risk_class === classF)
+  )
+
+  const deleteProduct = async (prod: string) => {
+    try {
+      await api.delete(`/system/rates/product/${prod}`)
+      message.success(`Deleted all rates for ${prod}`)
+      loadProducts(); setRates([])
+    } catch { message.error('Delete failed') }
+  }
+
+  const addRate = async () => {
+    setAdding(true)
+    try {
+      const v = addForm.getFieldsValue()
+      if (!v.product_code) { message.error('Product code required'); return }
+      await api.post('/system/rates/add', { ...v, product_code: v.product_code.toUpperCase() })
+      message.success('Rate added'); addForm.resetFields(); loadProducts()
+      if (selProd === v.product_code.toUpperCase()) loadRates(selProd)
+    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
+    finally { setAdding(false) }
+  }
+
+  const cols = [
+    { title:'Gender',    dataIndex:'gender',         width:80  },
+    { title:'Tobacco',   dataIndex:'tobacco_status',  width:120 },
+    { title:'Age',       width:80,  render:(_:any,r:Rate) => `${r.age_min}–${r.age_max}` },
+    { title:'Term',      dataIndex:'term_years',      width:70, render:(v:any) => v || '—' },
+    { title:'Risk Class',dataIndex:'risk_class',      width:140 },
+    { title:'Table',     dataIndex:'table_rating',    width:70  },
+    { title:'Rate/$1K',  dataIndex:'rate_per_thou',   width:90  },
+    { title:'Flat Extra',dataIndex:'flat_extra_rate', width:90  },
+    { title:'Effective', dataIndex:'effective_date',  width:110, render:(v:string) => v?.slice(0,10) || '—' },
+    { title:'Expires',   dataIndex:'expiry_date',     width:110, render:(v:string) => v?.slice(0,10) || 'Never' },
+    { title:'Label',     dataIndex:'rate_label',      render:(v:string) => v || '—' },
+  ]
+
+  return (
+    <div>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:16 }}>View, add, and delete premium rates per product.</div>
+
+      {/* Products summary */}
+      <div style={card}>
+        <div style={secTitle}>Rated Products</div>
+        {loading ? <Spin/> : products.length === 0
+          ? <div style={{ color:'#6b7280', fontSize:13 }}>No rate tables configured yet. Add rates below or upload a CSV.</div>
+          : <Table dataSource={products} rowKey="product_code" size="small" pagination={false}
+              columns={[
+                { title:'Product Code', dataIndex:'product_code', render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', color:'#00d4aa', fontWeight:600 }}>{v}</span> },
+                { title:'Rate Count',   dataIndex:'rate_count' },
+                { title:'Actions', render:(_:any, p:RatedProduct) => (
+                  <div style={{ display:'flex', gap:6 }}>
+                    <Button size="small" onClick={() => setSelProd(p.product_code)}
+                      style={{ borderColor:'rgba(96,165,250,0.25)', color:'#60a5fa' }}>View Rates</Button>
+                    <Popconfirm title={`Delete ALL rates for ${p.product_code}?`} onConfirm={() => deleteProduct(p.product_code)} okText="Yes" cancelText="No">
+                      <Button size="small" danger icon={<DeleteOutlined/>}>Delete All</Button>
+                    </Popconfirm>
+                  </div>
+                )},
+              ]}
+            />
+        }
+      </div>
+
+      {/* Rate viewer */}
+      {selProd && (
+        <div style={card}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+            <div style={secTitle}>Rates for <span style={{ color:'#00d4aa' }}>{selProd}</span> — {filtered.length} shown</div>
+            <div style={{ display:'flex', gap:8 }}>
+              <Select value={genderF} onChange={setGenderF} style={{ width:120 }}>
+                {['ALL','MALE','FEMALE'].map(v => <Option key={v} value={v}>{v}</Option>)}
+              </Select>
+              <Select value={tobF} onChange={setTobF} style={{ width:140 }}>
+                {['ALL','NON_TOBACCO','TOBACCO'].map(v => <Option key={v} value={v}>{v}</Option>)}
+              </Select>
+              <Select value={classF} onChange={setClassF} style={{ width:160 }}>
+                {['ALL',...RISK_CLASSES].map(v => <Option key={v} value={v}>{v}</Option>)}
+              </Select>
+            </div>
+          </div>
+          <Table dataSource={filtered} columns={cols} rowKey={(r,i) => String(r.id||i)} size="small"
+            pagination={{ pageSize:20, showSizeChanger:false }} scroll={{ x:true }}/>
+        </div>
+      )}
+
+      {/* Add single rate */}
+      <div style={card}>
+        <div style={secTitle}>Add Single Rate</div>
+        <Form form={addForm} layout="vertical" requiredMark={false}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+            <Form.Item name="product_code" label="Product Code" rules={[{required:true}]}>
+              <Input placeholder="e.g. IND-TERM-20" style={{ textTransform:'uppercase' }}/>
+            </Form.Item>
+            <Form.Item name="gender" label="Gender" initialValue="MALE">
+              <Select><Option value="MALE">MALE</Option><Option value="FEMALE">FEMALE</Option></Select>
+            </Form.Item>
+            <Form.Item name="tobacco_status" label="Tobacco" initialValue="NON_TOBACCO">
+              <Select><Option value="NON_TOBACCO">NON_TOBACCO</Option><Option value="TOBACCO">TOBACCO</Option></Select>
+            </Form.Item>
+            <Form.Item name="risk_class" label="Risk Class" initialValue="STANDARD">
+              <Select>{RISK_CLASSES.map(r => <Option key={r} value={r}>{r}</Option>)}</Select>
+            </Form.Item>
+            <Form.Item name="age_min" label="Age Min" initialValue={18}>
+              <InputNumber min={0} max={99} style={{ width:'100%' }}/>
+            </Form.Item>
+            <Form.Item name="age_max" label="Age Max" initialValue={29}>
+              <InputNumber min={0} max={99} style={{ width:'100%' }}/>
+            </Form.Item>
+            <Form.Item name="term_years" label="Term Years (0=any)" initialValue={20}>
+              <InputNumber min={0} max={50} style={{ width:'100%' }}/>
+            </Form.Item>
+            <Form.Item name="table_rating" label="Table Rating" initialValue={0}>
+              <Select>{TABLE_RATINGS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select>
+            </Form.Item>
+            <Form.Item name="rate_per_thou" label="Rate per $1K" initialValue={1.50}>
+              <InputNumber min={0} max={200} step={0.01} style={{ width:'100%' }}/>
+            </Form.Item>
+            <Form.Item name="flat_extra_rate" label="Flat Extra ($/K)" initialValue={0}>
+              <InputNumber min={0} max={20} step={0.25} style={{ width:'100%' }}/>
+            </Form.Item>
+            <Form.Item name="effective_date" label="Effective Date">
+              <Input type="date"/>
+            </Form.Item>
+            <Form.Item name="expiry_date" label="Expiry Date">
+              <Input type="date"/>
+            </Form.Item>
+          </div>
+          <Form.Item name="rate_label" label="Label / Source">
+            <Input placeholder="e.g. 2026 Reinsurer Schedule"/>
+          </Form.Item>
+          <Button type="primary" icon={<PlusOutlined/>} loading={adding} onClick={addRate}>
+            Add Rate
+          </Button>
+        </Form>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 4 — Upload Rates
+// ══════════════════════════════════════════════════════════════════════════════
+function UploadRatesTab() {
+  const [form]              = Form.useForm()
+  const [uploading, setUp]  = useState(false)
+  const [result, setResult] = useState<any>(null)
+
+  const TEMPLATE = [
+    'gender,tobacco_status,age_min,age_max,term_years,risk_class,table_rating,rate_per_thou,flat_extra_rate,rate_label,effective_date,expiry_date',
+    'MALE,NON_TOBACCO,18,29,20,PREFERRED_PLUS,0,0.83,0,2026 Schedule,2026-01-01,',
+    'MALE,NON_TOBACCO,18,29,20,PREFERRED,0,0.94,0,2026 Schedule,2026-01-01,',
+    'MALE,NON_TOBACCO,18,29,20,STANDARD,0,1.10,0,2026 Schedule,2026-01-01,',
+    'FEMALE,NON_TOBACCO,18,29,20,STANDARD,0,0.85,0,2026 Schedule,2026-01-01,',
+  ].join('\n')
+
+  const downloadTemplate = () => {
+    const blob = new Blob([TEMPLATE], { type:'text/csv' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = 'rate_template.csv'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const upload = async (file: File) => {
+    setUp(true); setResult(null)
+    try {
+      const v = form.getFieldsValue()
+      if (!v.product_code?.trim()) { message.error('Product code required'); return }
+      const fd = new FormData()
+      fd.append('file', file)
+      const r = await api.post('/system/rates/upload-csv', fd, {
+        params: {
+          product_code:     v.product_code.trim().toUpperCase(),
+          replace_existing: v.replace_existing !== false,
+          effective_date:   v.effective_date || undefined,
+          expiry_date:      v.expiry_date    || undefined,
+        },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setResult(r.data)
+      message.success(`Uploaded ${r.data.inserted} rates for ${r.data.product_code}`)
+    } catch(e:any) { message.error(e?.response?.data?.detail || 'Upload failed') }
+    finally { setUp(false) }
+    return false
+  }
+
+  return (
+    <div style={{ maxWidth: 680 }}>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:16 }}>Bulk upload premium rates from a CSV file.</div>
+      <div style={card}>
+        <div style={secTitle}>CSV Format</div>
+        <div style={{ fontSize:12, color:'#9ca3af', marginBottom:8 }}>
+          <strong style={{ color:'#e2e8f0' }}>Required columns:</strong> gender, age_min, age_max, rate_per_thou
+        </div>
+        <div style={{ fontSize:12, color:'#9ca3af', marginBottom:16 }}>
+          <strong style={{ color:'#e2e8f0' }}>Optional columns:</strong> tobacco_status, term_years, risk_class, table_rating, flat_extra_rate, rate_label, effective_date, expiry_date
+        </div>
+        <Button icon={<UploadOutlined/>} onClick={downloadTemplate}
+          style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>
+          Download CSV Template
+        </Button>
+      </div>
+
+      <div style={card}>
+        <div style={secTitle}>Upload Rates</div>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <Form.Item name="product_code" label="Product Code *" rules={[{required:true}]}>
+            <Input placeholder="e.g. IND-TERM-20" style={{ textTransform:'uppercase', maxWidth:280 }}/>
+          </Form.Item>
+          <Form.Item name="replace_existing" label=" " valuePropName="checked" initialValue={true}>
+            <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:10 }}>Replace existing rates for this product</span>
+          </Form.Item>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, maxWidth:400 }}>
+            <Form.Item name="effective_date" label="Effective Date (all rows)">
+              <Input type="date"/>
+            </Form.Item>
+            <Form.Item name="expiry_date" label="Expiry Date (all rows)">
+              <Input type="date"/>
+            </Form.Item>
+          </div>
+          <Upload.Dragger accept=".csv" beforeUpload={upload} showUploadList={false}>
+            <p style={{ color:'#9ca3af', fontSize:13 }}>
+              <UploadOutlined style={{ fontSize:24, marginBottom:8, display:'block', color:'#00d4aa' }}/>
+              Click or drag a CSV file to upload
+            </p>
+          </Upload.Dragger>
+        </Form>
+
+        {uploading && <div style={{ textAlign:'center', padding:20 }}><Spin/> Uploading…</div>}
+
+        {result && (
+          <div style={{ marginTop:16, background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.2)', borderRadius:8, padding:'12px 16px' }}>
+            <div style={{ fontSize:13, color:'#4ade80', fontWeight:600, marginBottom:4 }}>
+              ✓ Uploaded {result.inserted} rates for {result.product_code}
+            </div>
+            {result.errors?.length > 0 && (
+              <div style={{ fontSize:12, color:'#fbbf24', marginTop:8 }}>
+                {result.errors.length} rows had errors:
+                {result.errors.slice(0,5).map((e:string, i:number) => (
+                  <div key={i} style={{ color:'#f87171', marginTop:4 }}>⚠ {e}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 5 — Letter Templates
+// ══════════════════════════════════════════════════════════════════════════════
+const OUTCOMES = [
+  'APPROVED','APPROVED_STANDARD','APPROVED_RATED',
+  'DECLINED','POSTPONED','REFERRED',
+  'PENDING_REQUIREMENTS','COUNTER_OFFER',
+]
+
+const DEFAULT_BODIES: Record<string, string> = {
+  APPROVED:  'Dear {applicant_name},\n\nWe are pleased to inform you that your application has been approved at {risk_class} risk class.\n\nYour policy will be effective {policy_effective_date}. Your annual premium is {approved_premium}.\n\nThank you for choosing us.',
+  DECLINED:  'Dear {applicant_name},\n\nAfter careful review of your application, we regret that we are unable to offer coverage at this time.\n\nYou have the right to request the specific reasons within 60 days.',
+  POSTPONED: 'Dear {applicant_name},\n\nYour application has been postponed pending additional information. We will contact you shortly.',
+  REFERRED:  'Dear {applicant_name},\n\nYour application has been referred for additional underwriter review. We will notify you within 5 business days.',
+}
+
+const PLACEHOLDERS = '{applicant_name} · {outcome} · {risk_class} · {net_debits} · {policy_effective_date} · {approved_premium}'
+
+function TemplateForm({
+  initial, onSave, onDelete, onCancel, saving,
+}: {
+  initial?: Partial<LetterTemplate>
+  onSave: (payload: Partial<LetterTemplate>) => Promise<void>
+  onDelete?: () => Promise<void>
+  onCancel?: () => void
+  saving: boolean
+}) {
+  const [form] = Form.useForm()
+
+  useEffect(() => {
+    form.setFieldsValue({
+      template_name:       initial?.template_name || '',
+      outcome:             initial?.outcome || 'APPROVED',
+      is_active:           initial?.is_active ?? true,
+      header_company_name: initial?.header_company_name || '',
+      header_tagline:      initial?.header_tagline || '',
+      contact_email:       initial?.contact_email || '',
+      contact_phone:       initial?.contact_phone || '',
+      body_text:           initial?.body_text || DEFAULT_BODIES[initial?.outcome || 'APPROVED'] || '',
+      next_steps_raw:      initial?.next_steps
+        ? JSON.stringify(initial.next_steps, null, 2)
+        : '[\n  "Review your policy documents carefully",\n  "Sign and return the policy acceptance form",\n  "Make your first premium payment"\n]',
+      footer_text: initial?.footer_text || 'This letter is generated automatically. All decisions are subject to policy terms.',
+    })
+  }, [initial])
+
+  const submit = async () => {
+    const v = form.getFieldsValue()
+    let next_steps: string[] = []
+    try { next_steps = JSON.parse(v.next_steps_raw) } catch { next_steps = [] }
+    await onSave({ ...v, next_steps })
+  }
+
+  return (
+    <Form form={form} layout="vertical" requiredMark={false}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginBottom:4 }}>
+        <Form.Item name="template_name" label="Template Name *" rules={[{required:true}]}>
+          <Input placeholder="e.g. Standard Approval Letter"/>
+        </Form.Item>
+        <Form.Item name="outcome" label="Outcome *">
+          <Select onChange={v => { if (!initial) form.setFieldValue('body_text', DEFAULT_BODIES[v] || '') }}>
+            {OUTCOMES.map(o => <Option key={o} value={o}>{o}</Option>)}
+          </Select>
+        </Form.Item>
+        <Form.Item name="is_active" label="Set as Active" valuePropName="checked">
+          <Switch checkedChildren="Active" unCheckedChildren="Inactive"/>
+        </Form.Item>
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Company Header</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <Form.Item name="header_company_name" label="Company Name"><Input placeholder="Acme Life Insurance Co."/></Form.Item>
+          <Form.Item name="header_tagline" label="Tagline"><Input placeholder="Protecting families since 1985"/></Form.Item>
+        </div>
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Contact</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <Form.Item name="contact_email" label="Contact Email"><Input placeholder="uw@acmelife.com"/></Form.Item>
+          <Form.Item name="contact_phone" label="Contact Phone"><Input placeholder="+1-800-555-0100"/></Form.Item>
+        </div>
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Letter Body</div>
+        <div style={{ fontSize:11, color:'#6b7280', marginBottom:8 }}>
+          Placeholders: <code style={{ fontFamily:'var(--font-mono, monospace)', color:'#00d4aa' }}>{PLACEHOLDERS}</code>
+        </div>
+        <Form.Item name="body_text" label="Body Text">
+          <TextArea rows={8} placeholder="Dear {applicant_name},..."/>
+        </Form.Item>
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Next Steps (JSON array)</div>
+        <Form.Item name="next_steps_raw">
+          <TextArea rows={5} style={{ fontFamily:'var(--font-mono, monospace)', fontSize:12 }}/>
+        </Form.Item>
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Footer</div>
+        <Form.Item name="footer_text" label="Footer Text" help="Appears at the bottom of all letters — include IRDAI registration, grievance officer details, etc."><TextArea rows={3} placeholder="e.g. IRDAI Reg. No. 123 | Grievance Officer: grievance@carrier.com | 1800-xxx-xxxx"/></Form.Item>
+      </div>
+      <div style={{ display:'flex', gap:10 }}>
+        <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={submit}>
+          {initial ? 'Save Changes' : 'Create Template'}
+        </Button>
+        {onDelete && (
+          <Popconfirm title="Delete this template?" onConfirm={onDelete} okText="Delete" cancelText="Cancel">
+            <Button danger icon={<DeleteOutlined/>}>Delete</Button>
+          </Popconfirm>
+        )}
+        {onCancel && <Button onClick={onCancel}>Cancel</Button>}
+      </div>
+    </Form>
+  )
+}
+
+function LetterTemplatesTab() {
+  const [templates, setTemplates] = useState<LetterTemplate[]>([])
+  const [loading, setLoading]     = useState(true)
+  const [editTpl, setEditTpl]     = useState<LetterTemplate|null>(null)
+  const [saving, setSaving]       = useState(false)
+  const [activeSubTab, setSubTab] = useState('list')
+
+  const load = async () => {
+    setLoading(true)
+    try { const r = await api.get('/system/letter-templates'); setTemplates(Array.isArray(r.data) ? r.data : []) }
+    catch { setTemplates([]) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const setActive = async (t: LetterTemplate) => {
+    try { await api.patch(`/system/letter-templates/${t.id}`, { is_active: true }); message.success('Set as active'); load() }
+    catch { message.error('Failed') }
+  }
+
+  const doSave = async (payload: Partial<LetterTemplate>) => {
+    setSaving(true)
+    try {
+      if (editTpl) {
+        await api.put(`/system/letter-templates/${editTpl.id}`, payload)
+        message.success('Template updated'); setEditTpl(null); setSubTab('list')
+      } else {
+        await api.post('/system/letter-templates', payload)
+        message.success(`Template "${payload.template_name}" created`); setSubTab('list')
+      }
+      load()
+    } catch(e:any) { message.error(e?.response?.data?.detail || 'Save failed') }
+    finally { setSaving(false) }
+  }
+
+  const doDelete = async (id: string) => {
+    try { await api.delete(`/system/letter-templates/${id}`); message.success('Deleted'); setEditTpl(null); setSubTab('list'); load() }
+    catch { message.error('Delete failed') }
+  }
+
+  const byOutcome: Record<string, LetterTemplate[]> = {}
+  for (const t of templates) { if (!byOutcome[t.outcome]) byOutcome[t.outcome] = []; byOutcome[t.outcome].push(t) }
+  const active  = templates.filter(t => t.is_active).length
+  const covered = new Set(templates.filter(t => t.is_active).map(t => t.outcome)).size
+
+  const subTabs = [
+    {
+      key: 'list',
+      label: <span><FileTextOutlined/> All Templates</span>,
+      children: loading ? <Spin/> : templates.length === 0 ? (
+        <div style={{ color:'#6b7280', fontSize:13, padding:'24px 0' }}>
+          No templates yet. Create your first in the <strong style={{ color:'#e2e8f0' }}>New Template</strong> tab.
+        </div>
+      ) : (
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:20 }}>
+            {[{label:'Total',value:templates.length,color:'#00d4aa'},{label:'Active',value:active,color:'#22c55e'},{label:'Outcomes covered',value:covered,color:'#60a5fa'}].map(s=>(
+              <div key={s.label} style={{ background:'rgba(255,255,255,0.025)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:10,padding:'12px 16px' }}>
+                <div style={{ fontSize:20,fontWeight:700,color:s.color }}>{s.value}</div>
+                <div style={{ fontSize:11,color:'#6b7280',marginTop:2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {Object.entries(byOutcome).sort().map(([outcome, tlist]) => (
+            <div key={outcome} style={{ ...card, marginBottom:12 }}>
+              <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12 }}>
+                <div style={{ display:'flex',alignItems:'center',gap:10 }}>
+                  <Tag color={tlist.some(t=>t.is_active)?'success':'default'} style={{ fontSize:11,fontWeight:700 }}>{outcome}</Tag>
+                  <span style={{ fontSize:12,color:'#6b7280' }}>{tlist.length} template(s)</span>
+                </div>
+                {tlist.some(t=>t.is_active)
+                  ? <span style={{ fontSize:12,color:'#4ade80' }}>✅ Active template set</span>
+                  : <span style={{ fontSize:12,color:'#fbbf24' }}>⚠ No active template</span>}
+              </div>
+              {tlist.map(t => (
+                <div key={t.id} style={{ display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderTop:'1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ flex:1 }}>
+                    <span style={{ fontSize:13,color:t.is_active?'#00d4aa':'#e2e8f0',fontWeight:600 }}>{t.is_active?'🟢 ':'⚪ '}{t.template_name}</span>
+                    <span style={{ fontSize:11,color:'#6b7280',marginLeft:10 }}>v{t.version} · {t.updated_at?.slice(0,10)}</span>
+                  </div>
+                  <Button size="small" icon={<EditOutlined/>} onClick={() => { setEditTpl(t); setSubTab('edit') }}
+                    style={{ borderColor:'rgba(0,212,170,0.25)',color:'#00d4aa' }}>Edit</Button>
+                  {!t.is_active && <Button size="small" onClick={() => setActive(t)} style={{ borderColor:'rgba(34,197,94,0.25)',color:'#4ade80' }}>Set Active</Button>}
+                  {t.is_active && <span style={{ fontSize:11,color:'#4ade80',fontWeight:600,minWidth:60 }}>✅ In use</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      ),
+    },
+    {
+      key: 'edit',
+      label: <span><EditOutlined/> {editTpl ? `Edit — ${editTpl.template_name}` : 'Edit Template'}</span>,
+      children: !editTpl
+        ? <div style={{ color:'#6b7280',fontSize:13 }}>Select a template from All Templates and click Edit.</div>
+        : <TemplateForm initial={editTpl} saving={saving} onSave={doSave} onDelete={() => doDelete(editTpl.id)} onCancel={() => { setEditTpl(null); setSubTab('list') }}/>,
+    },
+    {
+      key: 'new',
+      label: <span><PlusOutlined/> New Template</span>,
+      children: <TemplateForm saving={saving} onSave={doSave}/>,
+    },
+  ]
+
+  return (
+    <div>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>
+        Configure branded decision letter templates for each underwriting outcome.
+        The active template for each outcome is used when generating PDF decision reports.
+      </div>
+      <Tabs activeKey={activeSubTab} onChange={setSubTab} items={subTabs}
+        tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:20 }}/>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 6 — SMTP / Email
+// ══════════════════════════════════════════════════════════════════════════════
+function SMTPTab() {
+  const [form]                  = Form.useForm()
+  const [saving, setSaving]     = useState(false)
+  const [testEmail, setTest]    = useState('')
+  const [testing, setTesting]   = useState(false)
+  const [connTesting, setConn]  = useState(false)
+  const [smtpStatus, setStatus] = useState<{host?:string; port?:string; from_email?:string} | null>(null)
+
+  useEffect(() => {
+    api.get('/system/smtp').then(r => {
+      form.setFieldsValue(r.data)
+      if (r.data?.host) setStatus(r.data)
+    }).catch(() => {})
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.post('/system/smtp', form.getFieldsValue())
+      message.success('SMTP settings saved')
+      const r = await api.get('/system/smtp')
+      if (r.data?.host) setStatus(r.data)
+    }
+    catch { message.error('Failed to save SMTP') }
+    finally { setSaving(false) }
+  }
+
+  const testConn = async () => {
+    const v = form.getFieldsValue()
+    if (!v.smtp_host) { message.warning('Enter SMTP Host first'); return }
+    setConn(true)
+    try {
+      await api.post('/system/smtp/test-connection', form.getFieldsValue())
+      message.success('✅ SMTP connection successful!')
+    } catch(e:any) { message.error('Connection failed: ' + (e?.response?.data?.detail || e.message)) }
+    finally { setConn(false) }
+  }
+
+  const sendTest = async () => {
+    if (!testEmail) { message.warning('Enter an email address'); return }
+    setTesting(true)
+    try { await api.post('/system/smtp/test', { to_email: testEmail }); message.success('Test email sent — check your inbox') }
+    catch { message.error('Failed to send test email') }
+    finally { setTesting(false) }
+  }
+
+  return (
+    <div style={{ maxWidth: 620 }}>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:16 }}>
+        Configure SMTP to automatically email decision letters. Works with Gmail, Outlook, SendGrid, AWS SES.
+      </div>
+
+      {/* Status banner */}
+      {smtpStatus?.host ? (
+        <div style={{ background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.25)', borderRadius:8,
+          padding:'8px 14px', marginBottom:16, fontSize:13, color:'#4ade80' }}>
+          ✅ SMTP configured: <strong>{smtpStatus.host}</strong> port {smtpStatus.port} from <strong>{smtpStatus.from_email}</strong>
+        </div>
+      ) : (
+        <div style={{ background:'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.2)', borderRadius:8,
+          padding:'8px 14px', marginBottom:16, fontSize:13, color:'#fbbf24' }}>
+          ⚠ SMTP not configured — decision letters will not be sent automatically.
+        </div>
+      )}
+
+      <div style={card}>
+        <div style={secTitle}>SMTP Configuration</div>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:12 }}>
+            <Form.Item name="smtp_host" label="SMTP Host"
+              extra={<span style={{ fontSize:11, color:'#6b7280' }}>Gmail: smtp.gmail.com · Outlook: smtp.office365.com · SendGrid: smtp.sendgrid.net</span>}>
+              <Input placeholder="smtp.gmail.com"/>
+            </Form.Item>
+            <Form.Item name="smtp_port" label="Port"
+              extra={<span style={{ fontSize:11, color:'#6b7280' }}>587=STARTTLS · 465=SSL · 25=plain</span>}>
+              <InputNumber min={1} max={65535} style={{ width:'100%', fontFamily:'var(--font-mono, monospace)' }} placeholder="587"/>
+            </Form.Item>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <Form.Item name="smtp_user" label="Username"
+              extra={<span style={{ fontSize:11, color:'#6b7280' }}>For SendGrid use 'apikey'</span>}>
+              <Input placeholder="your@email.com"/>
+            </Form.Item>
+            <Form.Item name="smtp_password" label="Password / App Password"
+              extra={<span style={{ fontSize:11, color:'#6b7280' }}>Gmail: use App Password, not your login password</span>}>
+              <Input.Password placeholder="App password or SMTP password"/>
+            </Form.Item>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <Form.Item name="smtp_from" label="From Email *">
+              <Input placeholder="noreply@yourcarrier.com"/>
+            </Form.Item>
+            <Form.Item name="smtp_from_name" label="From Name">
+              <Input placeholder="Acme Life Insurance"/>
+            </Form.Item>
+          </div>
+          <Form.Item name="smtp_use_tls" valuePropName="checked" initialValue={true}>
+            <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:10 }}>
+              Use STARTTLS <span style={{ color:'#6b7280' }}>(recommended — port 587. Uncheck only for SSL/TLS on port 465)</span>
+            </span>
+          </Form.Item>
+          <div style={{ display:'flex', gap:10 }}>
+            <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={save}>
+              Save SMTP Settings
+            </Button>
+            <Button icon={<ReloadOutlined/>} loading={connTesting} onClick={testConn}
+              style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>
+              Test Connection
+            </Button>
+          </div>
+        </Form>
+
+        <Divider style={{ borderColor:'rgba(255,255,255,0.08)' }}/>
+
+        <div style={{ fontSize:13, color:'#e2e8f0', fontWeight:600, marginBottom:12 }}>Send Test Email</div>
+        <div style={{ display:'flex', gap:10 }}>
+          <Input value={testEmail} onChange={e => setTest(e.target.value)}
+            placeholder="test@example.com" style={{ flex:1 }}/>
+          <Button onClick={sendTest} loading={testing}
+            style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>
+            Send Test
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 7 — API Keys
+// ══════════════════════════════════════════════════════════════════════════════
+function APIKeysTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
+  const [testing, setTesting]   = useState(false)
+  const [testResult, setResult] = useState<'success'|'error'|null>(null)
+  const [keyVal, setKeyVal]     = useState('')
+
+  useEffect(() => {
+    const k = configs.find(c => c.config_key === 'anthropic_api_key')?.config_value || ''
+    setKeyVal(k)
+  }, [configs])
+
+  const testAnthropic = async () => {
+    const key = keyVal || configs.find(c => c.config_key === 'anthropic_api_key')?.config_value
+    if (!key) { message.warning('No API key configured — save a key first'); return }
+    setTesting(true); setResult(null)
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 50,
+          messages: [{ role: 'user', content: 'Reply with: API connection successful' }],
+        }),
+      })
+      if (resp.ok) { setResult('success'); message.success('✅ Anthropic API connected successfully!') }
+      else {
+        const err = await resp.json()
+        setResult('error')
+        message.error(`API returned ${resp.status}: ${err?.error?.message || 'Unknown error'}`)
+      }
+    } catch(e:any) { setResult('error'); message.error('Connection failed: ' + e.message) }
+    finally { setTesting(false) }
+  }
+
+  const maskedKey = keyVal.length > 12
+    ? `${keyVal.slice(0,8)}...${keyVal.slice(-4)}`
+    : keyVal ? '••••••••' : ''
+
+  return (
+    <div style={{ maxWidth: 680 }}>
+
+      {/* Anthropic */}
+      <div style={card}>
+        <div style={secTitle}>Anthropic Claude AI</div>
+        <div style={{ background:'rgba(96,165,250,0.06)', border:'1px solid rgba(96,165,250,0.15)',
+          borderRadius:8, padding:'12px 16px', marginBottom:16 }}>
+          <div style={{ fontSize:12, fontWeight:600, color:'#60a5fa', marginBottom:6 }}>What this enables</div>
+          <div style={{ fontSize:12, color:'#9ca3af', lineHeight:1.8 }}>
+            • APS Document Abstraction — extract diagnoses, medications, labs from physician reports<br/>
+            • Underwriter Copilot — AI-suggested debit points with reasoning<br/>
+            • Case summarisation — one-click case narrative generation
+          </div>
+        </div>
+
+        {maskedKey && (
+          <div style={{ background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.2)',
+            borderRadius:6, padding:'6px 12px', marginBottom:12, fontSize:12, color:'#4ade80', display:'inline-block' }}>
+            ✅ Active key: <code style={{ color:'#86efac', fontFamily:'var(--font-mono, monospace)' }}>{maskedKey}</code>
+          </div>
+        )}
+
+        <div style={{ display:'flex', gap:10, alignItems:'flex-end' }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:12, color:'#6b7280', marginBottom:6 }}>
+              Anthropic API Key
+              <span style={{ marginLeft:8, color:'#4b5563' }}>Get from console.anthropic.com</span>
+            </div>
+            <Input.Password
+              value={keyVal} onChange={e => setKeyVal(e.target.value)}
+              placeholder="sk-ant-api03-..."
+              style={{ fontFamily:'var(--font-mono, monospace)' }}/>
+          </div>
+          <Button type="primary" icon={<SaveOutlined/>}
+            onClick={() => onSave('anthropic_api_key', keyVal)}>
+            Save Key
+          </Button>
+        </div>
+
+        <div style={{ display:'flex', gap:10, marginTop:12, alignItems:'center' }}>
+          <Button icon={<ReloadOutlined/>} loading={testing} onClick={testAnthropic}
+            style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>
+            Test Anthropic API
+          </Button>
+          {testResult === 'success' && <span style={{ fontSize:12, color:'#4ade80' }}>✅ Connection successful</span>}
+          {testResult === 'error'   && <span style={{ fontSize:12, color:'#f87171' }}>❌ Connection failed</span>}
+        </div>
+      </div>
+
+      {/* Auth & MFA */}
+      <div style={card}>
+        <div style={secTitle}>Auth &amp; MFA</div>
+        <ConfigRow cfgKey="mfa_required_roles"  label="MFA Required Roles"
+          hint="Comma-separated roles that must use TOTP MFA (e.g. admin,senior_underwriter)"
+          configs={configs} onSave={onSave}/>
+        <ConfigRow cfgKey="session_timeout_min" label="Session Timeout (minutes)"
+          hint="JWT token expiry — default 480 (8 hours)"
+          configs={configs} onSave={onSave} mono/>
+      </div>
+
+      {/* Batch */}
+      <div style={card}>
+        <div style={secTitle}>Batch Processing</div>
+        <ConfigRow cfgKey="max_batch_records" label="Max Batch Records"
+          hint="Maximum rows allowed per batch upload"
+          configs={configs} onSave={onSave} mono/>
+        <ConfigRow cfgKey="aps_auto_request"  label="Auto APS Request"
+          hint="true/false — auto-create APS when rule fires"
+          configs={configs} onSave={onSave} mono/>
+      </div>
+
+      {/* Other integrations */}
+      <div style={card}>
+        <div style={secTitle}>Other Integrations</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          {[
+            { icon:'☁️', name:'AWS S3',   desc:'Document storage',   status:'Not configured' },
+            { icon:'🔐', name:'Okta SSO', desc:'Enterprise SSO',     status:'Not configured' },
+          ].map(i => (
+            <div key={i.name} style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)',
+              borderRadius:8, padding:'14px 16px', textAlign:'center' }}>
+              <div style={{ fontSize:24, marginBottom:6 }}>{i.icon}</div>
+              <div style={{ fontSize:13, fontWeight:600, color:'#e2e8f0', marginBottom:4 }}>{i.name}</div>
+              <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>{i.desc}</div>
+              <div style={{ fontSize:11, color:'#fbbf24' }}>{i.status}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 7 — Error Codes
+// ══════════════════════════════════════════════════════════════════════════════
+function ErrorCodesTab() {
+  const [codes, setCodes]     = useState<ErrorCode[]>([])
+  const [loading, setLoading] = useState(true)
+  const [addOpen, setAddOpen] = useState(false)
+  const [form]                = Form.useForm()
+  const [saving, setSaving]   = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try { const r = await api.get('/system/error-codes'); setCodes(Array.isArray(r.data) ? r.data : []) }
+    catch { setCodes([]) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const add = async () => {
+    setSaving(true)
+    try {
+      await api.post('/system/error-codes', form.getFieldsValue())
+      message.success('Error code added'); setAddOpen(false); form.resetFields(); load()
+    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
+    finally { setSaving(false) }
+  }
+
+  const cols = [
+    { title:'Code',       dataIndex:'code',     width:100, render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', color:'#fbbf24', fontWeight:600 }}>{v}</span> },
+    { title:'Category',   dataIndex:'category', width:100 },
+    { title:'Severity',   dataIndex:'severity', width:100, render:(v:string) => <Tag color={v==='ERROR'?'error':v==='WARNING'?'warning':'default'}>{v}</Tag> },
+    { title:'Message',    dataIndex:'message'   },
+    { title:'Resolution', dataIndex:'resolution', render:(v:string) => v || '—' },
+  ]
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <div style={{ fontSize:13, color:'#6b7280' }}>{codes.length} error codes configured</div>
+        <Button icon={<PlusOutlined/>} type="primary" onClick={() => setAddOpen(true)}>Add Error Code</Button>
+      </div>
+      {loading
+        ? <Spin/>
+        : <Table dataSource={codes} columns={cols} rowKey="code" size="small" pagination={{ pageSize:20, showSizeChanger:false }}/>
+      }
+      <Modal title={<span style={{ color:'#e2e8f0' }}>Add Error Code</span>}
+        open={addOpen} onCancel={() => setAddOpen(false)} onOk={add}
+        confirmLoading={saving} okText="Add" styles={MS}>
+        <Form form={form} layout="vertical" requiredMark={false} style={{ marginTop:16 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <Form.Item name="code"     label="Code"     rules={[{required:true}]}><Input placeholder="DQ001" style={{ fontFamily:'var(--font-mono, monospace)' }}/></Form.Item>
+            <Form.Item name="category" label="Category" rules={[{required:true}]}><Input placeholder="DATA_QUALITY"/></Form.Item>
+            <Form.Item name="severity" label="Severity" initialValue="ERROR">
+              <Select><Option value="ERROR">ERROR</Option><Option value="WARNING">WARNING</Option><Option value="INFO">INFO</Option></Select>
+            </Form.Item>
+          </div>
+          <Form.Item name="message"    label="Message"    rules={[{required:true}]} help="Human-readable error shown to the agent or system"><Input placeholder="e.g. Date of birth is missing or invalid"/></Form.Item>
+          <Form.Item name="resolution" label="Resolution" help="Suggested fix — shown alongside the error to help agents self-resolve"><Input placeholder="e.g. Enter DOB in DD-MM-YYYY format"/></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 8 — State Codes
+// ══════════════════════════════════════════════════════════════════════════════
+function StateCodesTab() {
+  const [states, setStates]   = useState<StateCode[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+
+  const load = async () => {
+    setLoading(true)
+    try { const r = await api.get('/system/states'); setStates(Array.isArray(r.data) ? r.data : []) }
+    catch { setStates([]) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const filtered = states.filter(s =>
+    !search || s.state_code.toLowerCase().includes(search.toLowerCase()) ||
+    (s.state_name||'').toLowerCase().includes(search.toLowerCase())
+  )
+
+  const cols = [
+    { title:'Code',  dataIndex:'state_code',  width:80, render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color:'#00d4aa' }}>{v}</span> },
+    { title:'State Name', dataIndex:'state_name' },
+    { title:'Active',dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'error'}>{v?'Active':'Inactive'}</Tag> },
+  ]
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:10, marginBottom:16, alignItems:'center' }}>
+        <Input prefix={<EnvironmentOutlined style={{ color:'#6b7280' }}/>}
+          placeholder="Search codes…" value={search} onChange={e => setSearch(e.target.value)}
+          style={{ maxWidth:240 }} allowClear/>
+        <span style={{ fontSize:13, color:'#6b7280' }}>{filtered.length} of {states.length} state codes</span>
+        <Button icon={<ReloadOutlined/>} onClick={load} loading={loading} style={{ marginLeft:'auto' }}/>
+      </div>
+      {loading
+        ? <Spin/>
+        : states.length === 0
+          ? (
+            <div style={{ color:'#6b7280', padding:'24px 0', fontSize:13 }}>
+              No state codes found. Run <code style={{ background:'rgba(255,255,255,0.06)', padding:'2px 8px', borderRadius:4, fontFamily:'var(--font-mono, monospace)' }}>
+                python scripts/admin/create_tenant.py --demo
+              </code> to seed them.
+            </div>
+          ) : (
+            <Table dataSource={filtered} columns={cols} rowKey="state_code" size="small"
+              pagination={{ pageSize:25, showSizeChanger:false }} scroll={{ y:400 }}/>
+          )
+      }
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 9 — Notifications
+// ══════════════════════════════════════════════════════════════════════════════
+function NotificationsTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
+  const EVENTS: Record<string, string> = {
+    decision_approved:  'Decision Approved',
+    decision_declined:  'Decision Declined',
+    decision_referred:  'Decision Referred',
+    aps_requested:      'APS Requested',
+    batch_complete:     'Batch Job Complete',
+    user_created:       'New User Created',
+    mfa_enabled:        'MFA Enabled',
+    ri_cession_submitted: 'RI Cession Submitted',
+  }
+
+  return (
+    <div style={{ maxWidth: 680 }}>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>
+        Configure which platform events trigger email notifications and who receives them.
+        SMTP must be configured in the <strong style={{ color:'#e2e8f0' }}>SMTP / Email</strong> tab for notifications to send.
+      </div>
+
+      <div style={card}>
+        <div style={secTitle}>Reinsurance Email Settings</div>
+        <ConfigRow cfgKey="ri_auto_email_enabled" label="Auto-email reinsurer on cession"
+          hint="true/false — automatically email RI slip on cession submission" configs={configs} onSave={onSave} mono/>
+      </div>
+
+      <div style={card}>
+        <div style={secTitle}>Email From Address</div>
+        <ConfigRow cfgKey="email_from" label="Email From Address" hint="Default sender for all notification emails" configs={configs} onSave={onSave}/>
+      </div>
+
+      <div style={card}>
+        <div style={secTitle}>Event Notification Recipients</div>
+        <div style={{ fontSize:12, color:'#6b7280', marginBottom:12 }}>
+          Configure email recipients for each platform event. Comma-separate multiple addresses.
+        </div>
+        {Object.entries(EVENTS).map(([key, label]) => (
+          <ConfigRow key={key} cfgKey={`notif_recipient_${key}`} label={label}
+            hint={`Recipients for ${label.toLowerCase()} notifications`} configs={configs} onSave={onSave}/>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 10 — UW Scales
+// ══════════════════════════════════════════════════════════════════════════════
+
+const PARAMETER_OPTIONS = [
+  { value: 'age',              label: 'Age' },
+  { value: 'gender',           label: 'Gender (1=Male, 2=Female)' },
+  { value: 'smoker',           label: 'Smoker (1=Yes, 0=No)' },
+  { value: 'bmi',              label: 'BMI' },
+  { value: 'bp_systolic',      label: 'BP Systolic' },
+  { value: 'bp_diastolic',     label: 'BP Diastolic' },
+  { value: 'occupation_class', label: 'Occupation Class (1–4)' },
+  { value: 'policy_term',      label: 'Policy Term (years)' },
+  { value: 'sum_assured',      label: 'Sum Assured' },
+  { value: 'urine_albumin',    label: 'Urine Albumin' },
+  { value: 'family_history',   label: 'Family History (1=Yes, 0=No)' },
+]
+
+interface TrancheDetail   { id?: string; age_from: number; age_to: number; value: number }
+interface TrancheParameter { id?: string; parameter_name: string; parameter_type: 'RANGE'|'DISCRETE'; min_value: number|null; max_value: number|null }
+interface UWTranche        { id?: string; description: string; effective_date: string; expiry_date?: string; parameter_logic: 'AND'|'OR'; parameters: TrancheParameter[]; details: TrancheDetail[] }
+interface UWScale          { id?: string; name: string; description?: string; scale_type: 'UW'|'PREMIUM'; premium_output_type?: 'RATE_PER_THOUSAND'|'MULTIPLIER'|null; is_active: boolean; tranche_count?: number; tranches?: UWTranche[] }
+
+const emptyParam    = (): TrancheParameter => ({ parameter_name:'', parameter_type:'RANGE', min_value:null, max_value:null })
+const emptyDetail   = (): TrancheDetail   => ({ age_from:18, age_to:35, value:0 })
+const emptyTranche  = (): UWTranche       => ({ description:'', effective_date:'', expiry_date:'', parameter_logic:'AND', parameters:[], details:[] })
+const emptyUWScale  = (): UWScale         => ({ name:'', description:'', scale_type:'UW', premium_output_type:null, is_active:true, tranches:[emptyTranche()] })
+
+function UWTrancheEditor({ tranche, index, valueLabel, onChange, onRemove }: {
+  tranche: UWTranche; index: number; valueLabel: string
+  onChange: (i: number, t: UWTranche) => void; onRemove: (i: number) => void
+}) {
+  const updateParam  = (pi: number, p: TrancheParameter) => { const a=[...tranche.parameters]; a[pi]=p; onChange(index,{...tranche,parameters:a}) }
+  const removeParam  = (pi: number) => onChange(index,{...tranche,parameters:tranche.parameters.filter((_,i)=>i!==pi)})
+  const addParam     = () => onChange(index,{...tranche,parameters:[...tranche.parameters,emptyParam()]})
+  const updateDetail = (di: number, d: TrancheDetail)   => { const a=[...tranche.details]; a[di]=d; onChange(index,{...tranche,details:a}) }
+  const removeDetail = (di: number) => onChange(index,{...tranche,details:tranche.details.filter((_,i)=>i!==di)})
+  const addDetail    = () => onChange(index,{...tranche,details:[...tranche.details,emptyDetail()]})
+
+  return (
+    <div style={{ border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, marginBottom:12, overflow:'hidden' }}>
+      <div style={{ background:'rgba(0,212,170,0.06)', padding:'10px 16px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <span style={{ fontSize:12, fontWeight:600, color:'#00d4aa' }}>Tranche {index+1}</span>
+        <Popconfirm title="Remove this tranche?" onConfirm={() => onRemove(index)} okText="Remove" cancelText="Cancel">
+          <Button size="small" danger type="text" icon={<DeleteOutlined/>}>Remove</Button>
+        </Popconfirm>
+      </div>
+      <div style={{ padding:16 }}>
+        {/* Basic fields */}
+        <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr', gap:12, marginBottom:16 }}>
+          <div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:4 }}>DESCRIPTION</div>
+            <Input value={tranche.description} onChange={e=>onChange(index,{...tranche,description:e.target.value})} placeholder="e.g. Male Non-Smoker 30-40"/>
+          </div>
+          <div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:4 }}>EFFECTIVE DATE</div>
+            <Input type="date" value={tranche.effective_date} onChange={e=>onChange(index,{...tranche,effective_date:e.target.value})}/>
+          </div>
+          <div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:4 }}>EXPIRY DATE <span style={{ color:'#4b5563' }}>(blank=open)</span></div>
+            <Input type="date" value={tranche.expiry_date||''} onChange={e=>onChange(index,{...tranche,expiry_date:e.target.value})}/>
+          </div>
+          <div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:4 }}>LOGIC</div>
+            <Select value={tranche.parameter_logic} onChange={v=>onChange(index,{...tranche,parameter_logic:v})} style={{ width:'100%' }}>
+              <Option value="AND">AND — all match</Option>
+              <Option value="OR">OR — any match</Option>
+            </Select>
+          </div>
+        </div>
+
+        {/* Parameters */}
+        <div style={{ marginBottom:16 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+            <div style={secTitle}>Parameters</div>
+            <Button size="small" icon={<PlusOutlined/>} onClick={addParam} style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>Add Parameter</Button>
+          </div>
+          {tranche.parameters.length === 0
+            ? <div style={{ fontSize:12, color:'#4b5563', fontStyle:'italic', paddingBottom:8 }}>No parameters — click Add Parameter</div>
+            : <>
+                <div style={{ display:'grid', gridTemplateColumns:'3fr 1fr 1fr 1fr auto', gap:8, marginBottom:4 }}>
+                  {['Parameter','Type','Min','Max',''].map(h=><div key={h} style={{ fontSize:10, color:'#4b5563', textTransform:'uppercase', letterSpacing:'0.06em' }}>{h}</div>)}
+                </div>
+                {tranche.parameters.map((p,pi)=>(
+                  <div key={pi} style={{ display:'grid', gridTemplateColumns:'3fr 1fr 1fr 1fr auto', gap:8, marginBottom:6 }}>
+                    <Select value={p.parameter_name||undefined} onChange={v=>updateParam(pi,{...p,parameter_name:v})} placeholder="Select…">
+                      {PARAMETER_OPTIONS.map(o=><Option key={o.value} value={o.value}>{o.label}</Option>)}
+                    </Select>
+                    <Select value={p.parameter_type} onChange={v=>updateParam(pi,{...p,parameter_type:v})}>
+                      <Option value="RANGE">Range</Option><Option value="DISCRETE">Discrete</Option>
+                    </Select>
+                    <InputNumber value={p.min_value??undefined} onChange={v=>updateParam(pi,{...p,min_value:v??null})} placeholder="Min" style={{ width:'100%' }}/>
+                    <InputNumber value={p.max_value??undefined} onChange={v=>updateParam(pi,{...p,max_value:v??null})} placeholder="Max" style={{ width:'100%' }}/>
+                    <Button size="small" danger type="text" icon={<DeleteOutlined/>} onClick={()=>removeParam(pi)}/>
+                  </div>
+                ))}
+              </>
+          }
+        </div>
+
+        {/* Age-band details */}
+        <div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+            <div style={secTitle}>Age-band Output ({valueLabel})</div>
+            <Button size="small" icon={<PlusOutlined/>} onClick={addDetail} style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>Add Age Band</Button>
+          </div>
+          {tranche.details.length === 0
+            ? <div style={{ fontSize:12, color:'#4b5563', fontStyle:'italic' }}>No age bands — click Add Age Band</div>
+            : <>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr auto', gap:8, marginBottom:4 }}>
+                  {['Age From','Age To',valueLabel,''].map(h=><div key={h} style={{ fontSize:10, color:'#4b5563', textTransform:'uppercase', letterSpacing:'0.06em' }}>{h}</div>)}
+                </div>
+                {tranche.details.map((d,di)=>(
+                  <div key={di} style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr auto', gap:8, marginBottom:6 }}>
+                    <InputNumber value={d.age_from} min={0} max={99} onChange={v=>updateDetail(di,{...d,age_from:v??0})} style={{ width:'100%' }}/>
+                    <InputNumber value={d.age_to}   min={0} max={99} onChange={v=>updateDetail(di,{...d,age_to:  v??0})} style={{ width:'100%' }}/>
+                    <InputNumber value={d.value} step={0.0001} onChange={v=>updateDetail(di,{...d,value:v??0})} style={{ width:'100%', color:'#00d4aa' }}/>
+                    <Button size="small" danger type="text" icon={<DeleteOutlined/>} onClick={()=>removeDetail(di)}/>
+                  </div>
+                ))}
+              </>
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UWScaleModal({ initial, onSave, onClose, open }: {
+  initial: UWScale; onSave: (s: UWScale) => Promise<void>; onClose: () => void; open: boolean
+}) {
+  const [scale, setScale] = useState<UWScale>(initial)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setScale(initial) }, [initial, open])
+
+  const valueLabel = scale.scale_type==='UW' ? 'Debit Points'
+    : scale.premium_output_type==='RATE_PER_THOUSAND' ? 'Rate per ₹1,000 SA' : 'Multiplier'
+
+  const addTranche    = () => setScale(s=>({...s,tranches:[...(s.tranches||[]),emptyTranche()]}))
+  const updateTranche = (i:number,t:UWTranche) => { const a=[...(scale.tranches||[])]; a[i]=t; setScale(s=>({...s,tranches:a})) }
+  const removeTranche = (i:number) => setScale(s=>({...s,tranches:(s.tranches||[]).filter((_,idx)=>idx!==i)}))
+
+  const handleSave = async () => {
+    if (!scale.name.trim())                                      { message.error('Scale name is required'); return }
+    if (scale.scale_type==='PREMIUM' && !scale.premium_output_type) { message.error('Select output type for Premium scale'); return }
+    if (!scale.tranches?.length)                                 { message.error('Add at least one tranche'); return }
+    setSaving(true)
+    try { await onSave(scale) } catch(e:any) { message.error(e?.message||'Save failed') } finally { setSaving(false) }
+  }
+
+  return (
+    <Modal
+      title={<span style={{ color:'#e2e8f0' }}>{scale.id ? 'Edit Scale' : 'Create UW / Premium Scale'}</span>}
+      open={open} onCancel={onClose} width={880} styles={MS}
+      footer={[
+        <Button key="c" onClick={onClose}>Cancel</Button>,
+        <Button key="s" type="primary" icon={<SaveOutlined/>} loading={saving} onClick={handleSave}>
+          {scale.id ? 'Save Changes' : 'Create Scale'}
+        </Button>,
+      ]}
+    >
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16, marginTop:16 }}>
+        <div style={{ gridColumn:'1 / -1' }}>
+          <div style={{ fontSize:11, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Scale Name *</div>
+          <Input value={scale.name} onChange={e=>setScale(s=>({...s,name:e.target.value}))} placeholder="e.g. Standard Mortality Table 2024"/>
+        </div>
+        <div style={{ gridColumn:'1 / -1' }}>
+          <div style={{ fontSize:11, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Description</div>
+          <TextArea value={scale.description||''} onChange={e=>setScale(s=>({...s,description:e.target.value}))} rows={2} placeholder="Brief description…"/>
+        </div>
+        <div>
+          <div style={{ fontSize:11, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Scale Type *</div>
+          <Select value={scale.scale_type} onChange={v=>setScale(s=>({...s,scale_type:v,premium_output_type:null}))} style={{ width:'100%' }}>
+            <Option value="UW">UW Scale — Debit Points</Option>
+            <Option value="PREMIUM">Premium Rate Scale</Option>
+          </Select>
+        </div>
+        {scale.scale_type==='PREMIUM' && (
+          <div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Output Type *</div>
+            <Select value={scale.premium_output_type||undefined} onChange={v=>setScale(s=>({...s,premium_output_type:v}))} placeholder="Select…" style={{ width:'100%' }}>
+              <Option value="RATE_PER_THOUSAND">Rate per ₹1,000 SA</Option>
+              <Option value="MULTIPLIER">Multiplier</Option>
+            </Select>
+          </div>
+        )}
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <Switch checked={scale.is_active} onChange={v=>setScale(s=>({...s,is_active:v}))} checkedChildren="Active" unCheckedChildren="Inactive"/>
+        </div>
+      </div>
+
+      <div style={{ borderTop:'1px solid rgba(255,255,255,0.07)', paddingTop:16 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+          <div style={{ fontSize:13, fontWeight:600, color:'#e2e8f0' }}>Tranches</div>
+          <Button icon={<PlusOutlined/>} type="primary" onClick={addTranche}>Add Tranche</Button>
+        </div>
+        {(scale.tranches||[]).map((t,i)=>(
+          <UWTrancheEditor key={i} tranche={t} index={i} valueLabel={valueLabel} onChange={updateTranche} onRemove={removeTranche}/>
+        ))}
+      </div>
+    </Modal>
+  )
+}
+
+function UWTrancheReadOnly({ tranche }: { tranche: UWTranche }) {
+  return (
+    <div style={{ border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, marginBottom:10, overflow:'hidden' }}>
+      <div style={{ background:'rgba(0,212,170,0.05)', padding:'8px 14px', display:'flex', alignItems:'center', gap:12 }}>
+        <Tag color="cyan" style={{ fontWeight:600, fontSize:11 }}>{tranche.parameter_logic}</Tag>
+        <span style={{ fontSize:13, color:'#e2e8f0' }}>{tranche.description}</span>
+        <span style={{ fontSize:11, color:'#6b7280', marginLeft:'auto' }}>{tranche.effective_date} → {tranche.expiry_date||'open'}</span>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:0 }}>
+        <div style={{ padding:'12px 14px', borderRight:'1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ fontSize:10, color:'#4b5563', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>Parameters</div>
+          {tranche.parameters.length===0
+            ? <span style={{ fontSize:12, color:'#4b5563', fontStyle:'italic' }}>None</span>
+            : tranche.parameters.map((p,i)=>(
+              <div key={i} style={{ display:'flex', justifyContent:'space-between', fontSize:12, padding:'3px 0', borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
+                <span style={{ color:'#9ca3af', textTransform:'capitalize' }}>{p.parameter_name.replace(/_/g,' ')}</span>
+                <span style={{ color:'#00d4aa', fontFamily:'var(--font-mono,monospace)' }}>{p.min_value??'—'} → {p.max_value??'—'}</span>
+              </div>
+            ))
+          }
+        </div>
+        <div style={{ padding:'12px 14px' }}>
+          <div style={{ fontSize:10, color:'#4b5563', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>Age-band Output</div>
+          {tranche.details.length===0
+            ? <span style={{ fontSize:12, color:'#4b5563', fontStyle:'italic' }}>None</span>
+            : tranche.details.map((d,i)=>(
+              <div key={i} style={{ display:'flex', justifyContent:'space-between', fontSize:12, padding:'3px 0', borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
+                <span style={{ color:'#9ca3af' }}>Age {d.age_from}–{d.age_to}</span>
+                <span style={{ color:'#00d4aa', fontWeight:600, fontFamily:'var(--font-mono,monospace)' }}>{d.value}</span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UWScalesTab() {
+  const [scales, setScales]         = useState<UWScale[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [filterType, setFilterType] = useState<'ALL'|'UW'|'PREMIUM'>('ALL')
+  const [modalOpen, setModalOpen]   = useState(false)
+  const [editing, setEditing]       = useState<UWScale|null>(null)
+  const [expanded, setExpanded]     = useState<Record<string,UWScale>>({})
+  const [expanding, setExpanding]   = useState<string|null>(null)
+
+  const load = async (ft: 'ALL'|'UW'|'PREMIUM' = filterType) => {
+    setLoading(true)
+    try {
+      const params = ft!=='ALL' ? { scale_type: ft } : {}
+      const r = await api.get('/uw-scales/', { params })
+      setScales(Array.isArray(r.data) ? r.data : [])
+    } catch { message.error('Failed to load UW scales') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { load(filterType) }, [filterType])
+
+  const openEdit = async (id: string) => {
+    try { const r = await api.get(`/uw-scales/${id}`); setEditing(r.data); setModalOpen(true) }
+    catch { message.error('Failed to load scale') }
+  }
+
+  const handleSave = async (scale: UWScale) => {
+    if (scale.id) {
+      await api.put(`/uw-scales/${scale.id}`, { ...scale, premium_output_type: scale.premium_output_type||null })
+      message.success('Scale updated')
+    } else {
+      await api.post('/uw-scales/', { ...scale, premium_output_type: scale.premium_output_type||null })
+      message.success('Scale created')
+    }
+    setModalOpen(false); setEditing(null); setExpanded({}); load()
+  }
+
+  const handleDelete = async (id: string, name: string) => {
+    try { await api.delete(`/uw-scales/${id}`); message.success(`Deleted: ${name}`); load() }
+    catch(e:any) { message.error(e?.response?.data?.detail||'Delete failed') }
+  }
+
+  const toggleExpand = async (id: string) => {
+    if (expanded[id]) { setExpanded(p=>{ const n={...p}; delete n[id]; return n }); return }
+    setExpanding(id)
+    try { const r = await api.get(`/uw-scales/${id}`); setExpanded(p=>({...p,[id]:r.data})) }
+    catch { message.error('Failed to load tranche details') }
+    finally { setExpanding(null) }
+  }
+
+  const cols = [
+    {
+      title:'Scale Name', dataIndex:'name',
+      render:(v:string,r:UWScale)=>(
+        <div>
+          <div style={{ fontWeight:600, color:'#e2e8f0', fontSize:13 }}>{v}</div>
+          {r.description && <div style={{ fontSize:11, color:'#6b7280', marginTop:2 }}>{r.description}</div>}
+        </div>
+      ),
+    },
+    { title:'Type', dataIndex:'scale_type', width:90,
+      render:(v:string)=><Tag color={v==='UW'?'cyan':'gold'} style={{ fontWeight:700, fontSize:11 }}>{v}</Tag> },
+    { title:'Output', dataIndex:'premium_output_type', width:150,
+      render:(v:string|null)=>v
+        ? <span style={{ fontSize:11, color:'#9ca3af' }}>{v==='RATE_PER_THOUSAND'?'Rate / ₹1k SA':'Multiplier'}</span>
+        : <span style={{ fontSize:11, color:'#4b5563' }}>Debit Points</span> },
+    { title:'Tranches', dataIndex:'tranche_count', width:90,
+      render:(v:number)=><span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontWeight:600 }}>{v??0}</span> },
+    { title:'Status', dataIndex:'is_active', width:90,
+      render:(v:boolean)=><Tag color={v?'success':'default'}>{v?'Active':'Inactive'}</Tag> },
+    { title:'Actions', width:200,
+      render:(_:any,r:UWScale)=>(
+        <Space size={4}>
+          <Button size="small" icon={<CaretRightOutlined rotate={expanded[r.id!]?90:0}/>}
+            loading={expanding===r.id} onClick={()=>toggleExpand(r.id!)}
+            style={{ borderColor:'rgba(96,165,250,0.25)', color:'#60a5fa' }}>
+            {expanded[r.id!]?'Collapse':'View'}
+          </Button>
+          <Button size="small" icon={<EditOutlined/>} onClick={()=>openEdit(r.id!)}
+            style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>Edit</Button>
+          <Popconfirm title={`Delete "${r.name}"?`} onConfirm={()=>handleDelete(r.id!,r.name)} okText="Delete" cancelText="Cancel">
+            <Button size="small" danger icon={<DeleteOutlined/>}/>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  return (
+    <div>
+      <div style={{ fontSize:13, color:'#6b7280', marginBottom:16 }}>
+        Configure UW debit point scales and premium rate scales. Attach them to products to drive underwriting decisions and premium calculations.
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <Space>
+          {(['ALL','UW','PREMIUM'] as const).map(t=>(
+            <Button key={t} size="small" type={filterType===t?'primary':'default'}
+              onClick={()=>{ setFilterType(t); load(t) }}>
+              {t==='ALL'?'All Scales':t==='UW'?'UW Scales':'Premium Scales'}
+            </Button>
+          ))}
+        </Space>
+        <Button type="primary" icon={<PlusOutlined/>} onClick={()=>{ setEditing(null); setModalOpen(true) }}>
+          New Scale
+        </Button>
+      </div>
+
+      {loading
+        ? <div style={{ textAlign:'center', padding:40 }}><Spin size="large"/></div>
+        : <Table
+            dataSource={scales} columns={cols} rowKey="id" size="small"
+            pagination={{ pageSize:20, showSizeChanger:false }}
+            expandable={{
+              expandedRowKeys: Object.keys(expanded),
+              showExpandColumn: false,
+              expandedRowRender:(r:UWScale)=>{
+                const d=expanded[r.id!]
+                if (!d) return <Spin/>
+                return (
+                  <div style={{ padding:'12px 8px' }}>
+                    {!d.tranches?.length
+                      ? <span style={{ fontSize:12, color:'#4b5563', fontStyle:'italic' }}>No tranches defined</span>
+                      : d.tranches.map((t,i)=><UWTrancheReadOnly key={i} tranche={t}/>)
+                    }
+                  </div>
+                )
+              },
+            }}
+          />
+      }
+
+      <UWScaleModal
+        open={modalOpen}
+        initial={editing||emptyUWScale()}
+        onSave={handleSave}
+        onClose={()=>{ setModalOpen(false); setEditing(null) }}
+      />
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 11 — User Labels
+// ══════════════════════════════════════════════════════════════════════════════
+interface UserLabel {
+  i: string
+  label_key:      string
+  label_name:     string
+  data_type:      string
+  default_value?: string
+  description?:   string
+  prefix?:        string
+  suffix?:        string
+  is_required:    boolean
+  is_active:      boolean
+  effective_date: string
+  expiry_date?:   string
+  sort_order:     number
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────
+const DATA_TYPES = [
+  { value: 'CURRENCY',   label: '₹ Currency',    prefix: '₹',  suffix: ''  },
+  { value: 'INTEGER',    label: '# Integer',     prefix: '',   suffix: ''  },
+  { value: 'DECIMAL',    label: '0.0 Decimal',   prefix: '',   suffix: ''  },
+  { value: 'PERCENTAGE', label: '% Percentage',  prefix: '',   suffix: '%' },
+  { value: 'TEXT',       label: 'T Text',        prefix: '',   suffix: ''  },
+]
+
+const TYPE_COLOR: Record<string, string> = {
+  CURRENCY:   'gold',
+  INTEGER:    'blue',
+  DECIMAL:    'cyan',
+  PERCENTAGE: 'purple',
+  TEXT:       'default',
+}
+
+const emptyLabel = (): UserLabel => ({
+  label_key:      '',
+  label_name:     '',
+  data_type:      'CURRENCY',
+  default_value:  '',
+  description:    '',
+  prefix:         '₹',
+  suffix:         '',
+  is_required:    false,
+  is_active:      true,
+  effective_date: new Date().toISOString().split('T')[0],
+  expiry_date:    '',
+  sort_order:     0,
+})
+
+// ── Label Modal ─────────────────────────────────────────────────────────
+function UserLabelModal({
+  open, initial, onSave, onClose,
+}: {
+  open: boolean
+  initial: UserLabel | null
+  onSave: (l: UserLabel) => Promise<void>
+  onClose: () => void
+}) {
+  const [label, setLabel]         = useState<UserLabel>(initial || emptyLabel())
+  const [saving, setSaving]       = useState(false)
+  const [keyStatus, setKeyStatus] = useState<'idle'|'checking'|'ok'|'duplicate'>('idle')
+  const keyInputRef               = useRef<HTMLInputElement>(null)
+  const prevOpen                  = useRef(false)
+
+  // Only reset when modal transitions from closed → open
+  useEffect(() => {
+    if (open && !prevOpen.current) {
+      const fresh = initial || emptyLabel()
+      setLabel(fresh)
+      setKeyStatus('idle')
+      // Use setTimeout to ensure Modal has finished rendering before we set the value
+      setTimeout(() => {
+        if (keyInputRef.current) keyInputRef.current.value = fresh.label_key
+      }, 0)
+    }
+    prevOpen.current = open
+  }, [open])  // intentionally NOT watching `initial` — only open transition matters
+
+  const handleKeyBlur = async () => {
+    if (label.id) return
+    const raw = keyInputRef.current?.value ?? ''
+    const key = raw.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+    // Show sanitised value in the box
+    if (keyInputRef.current) keyInputRef.current.value = key
+    if (!key || !/^[a-z][a-z0-9_]*$/.test(key)) {
+      setKeyStatus('idle')
+      return
+    }
+    setKeyStatus('checking')
+    try {
+      const r = await api.get('/system/user-labels/check-key', { params: { key } })
+      setKeyStatus(r.data.exists ? 'duplicate' : 'ok')
+    } catch {
+      setKeyStatus('idle')
+    }
+  }
+
+  const handleTypeChange = (type: string) => {
+    const t = DATA_TYPES.find(d => d.value === type)
+    setLabel(l => ({ ...l, data_type: type, prefix: t?.prefix || '', suffix: t?.suffix || '' }))
+  }
+
+  const handleSave = async () => {
+    // Read key directly from DOM - source of truth
+    const raw = keyInputRef.current?.value ?? label.label_key
+    const key = raw.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+    if (!key.trim()) { message.error('Label key is required'); return }
+    if (!label.label_name.trim()) { message.error('Label name is required'); return }
+    if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+      message.error('Label key must be lowercase letters, numbers, underscores only')
+      return
+    }
+    if (keyStatus === 'duplicate') {
+      message.error(`Label key "${key}" already exists — choose a different key`)
+      return
+    }
+    if (keyStatus === 'checking') {
+      message.warning('Still validating label key, please wait a moment')
+      return
+    }
+    // If user never blurred the field, validate now before saving
+    if (keyStatus === 'idle' && !label.id) {
+      setKeyStatus('checking')
+      try {
+        const r = await api.get('/system/user-labels/check-key', { params: { key } })
+        if (r.data.exists) {
+          setKeyStatus('duplicate')
+          message.error(`Label key "${key}" already exists — choose a different key`)
+          return
+        }
+        setKeyStatus('ok')
+      } catch { /* proceed, backend will catch */ }
+    }
+    setSaving(true)
+    try {
+      await onSave({
+        ...label,
+        label_key:     key,
+        expiry_date:   label.expiry_date   || undefined,
+        default_value: label.default_value || undefined,
+        description:   label.description   || undefined,
+        prefix:        label.prefix        || undefined,
+        suffix:        label.suffix        || undefined,
+      })
+    } catch (e: any) { message.error(e?.message || 'Save failed') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal
+      title={<span style={{ color: '#e2e8f0' }}>{label.id ? 'Edit User Label' : 'Create User Label'}</span>}
+      open={open} onCancel={onClose} width={640} styles={MS}
+      destroyOnClose={false}
+      footer={[
+        <Button key="c" onClick={onClose}>Cancel</Button>,
+        <Button key="s" type="primary" icon={<SaveOutlined/>} loading={saving} onClick={handleSave}>
+          {label.id ? 'Save Changes' : 'Create Label'}
+        </Button>,
+      ]}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
+
+        {/* Label Key — raw <input>, no controlled state, no onChange re-renders */}
+        <div>
+          <div style={fieldLabel}>Label Key * <span style={{ color: '#4b5563', fontWeight: 400 }}>(machine name)</span></div>
+          <div style={{ position: 'relative' }}>
+            <input
+              ref={keyInputRef}
+              onBlur={handleKeyBlur}
+              placeholder="e.g. rider_sa"
+              disabled={!!label.id}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: label.id ? '#111827' : '#1f2937',
+                border: `1px solid ${keyStatus === 'duplicate' ? '#f87171' : keyStatus === 'ok' ? '#4ade80' : 'rgba(255,255,255,0.15)'}`,
+                borderRadius: 6, padding: '4px 32px 4px 11px', height: 32,
+                color: '#e2e8f0', fontSize: 14, outline: 'none',
+                cursor: label.id ? 'not-allowed' : 'text',
+                opacity: label.id ? 0.5 : 1,
+              }}
+            />
+            <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', lineHeight: 1, pointerEvents: 'none' }}>
+              {keyStatus === 'checking'  && <Spin size="small" />}
+              {keyStatus === 'ok'        && <span style={{ color: '#4ade80', fontSize: 14 }}>✓</span>}
+              {keyStatus === 'duplicate' && <span style={{ color: '#f87171', fontSize: 14 }}>✗</span>}
+            </span>
+          </div>
+          {keyStatus === 'duplicate'
+            ? <div style={{ fontSize: 11, color: '#f87171', marginTop: 3 }}>This key already exists — choose a different one</div>
+            : keyStatus === 'ok'
+            ? <div style={{ fontSize: 11, color: '#4ade80', marginTop: 3 }}>Key is available ✓</div>
+            : <div style={{ fontSize: 10, color: '#4b5563', marginTop: 3 }}>Lowercase, underscores only. Used in formula steps and CSV columns.</div>
+          }
+        </div>
+
+        {/* Label Name */}
+        <div>
+          <div style={fieldLabel}>Display Name *</div>
+          <Input
+            value={label.label_name}
+            onChange={e => setLabel(l => ({ ...l, label_name: e.target.value }))}
+            placeholder="e.g. Rider Sum Assured"
+          />
+        </div>
+
+        {/* Data Type */}
+        <div>
+          <div style={fieldLabel}>Data Type *</div>
+          <Select
+            value={label.data_type}
+            onChange={handleTypeChange}
+            style={{ width: '100%' }}
+          >
+            {DATA_TYPES.map(t => (
+              <Option key={t.value} value={t.value}>
+                <Tag color={TYPE_COLOR[t.value]} style={{ fontSize: 11 }}>{t.value}</Tag>
+                {' '}{t.label}
+              </Option>
+            ))}
+          </Select>
+        </div>
+
+        {/* Default Value */}
+        <div>
+          <div style={fieldLabel}>Default Value</div>
+          <Input
+            value={label.default_value || ''}
+            onChange={e => setLabel(l => ({ ...l, default_value: e.target.value }))}
+            placeholder="Pre-filled value for agents"
+            prefix={<span style={{ color: '#6b7280', fontSize: 12 }}>{label.prefix}</span>}
+            suffix={<span style={{ color: '#6b7280', fontSize: 12 }}>{label.suffix}</span>}
+          />
+        </div>
+
+        {/* Prefix override */}
+        <div>
+          <div style={fieldLabel}>Prefix <span style={{ color: '#4b5563', fontWeight: 400 }}>(auto-set from type)</span></div>
+          <Input
+            value={label.prefix || ''}
+            onChange={e => setLabel(l => ({ ...l, prefix: e.target.value }))}
+            placeholder="₹"
+          />
+        </div>
+
+        {/* Suffix override */}
+        <div>
+          <div style={fieldLabel}>Suffix <span style={{ color: '#4b5563', fontWeight: 400 }}>(auto-set from type)</span></div>
+          <Input           value={label.suffix || ''}
+            onChange={e => setLabel(l => ({ ...l, suffix: e.target.value }))}
+            placeholder="%"
+          />
+        </div>
+
+        {/* Description */}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <div style={fieldLabel}>Description <span style={{ color: '#4b5563', fontWeight: 400 }}>(shown to agent as help text)</span></div>
+          <TextArea
+            value={label.description || ''}
+            onChange={e => setLabel(l => ({ ...l, description: e.target.value }))}
+            rows={2}
+            placeholder="Brief description of what this input means"
+          />
+        </div>
+
+        {/* Effective Date */}
+        <div>
+          <div style={fieldLabel}>Effective Date *</div>
+          <Input
+            type="date"
+            value={label.effective_date}
+            onChange={e => setLabel(l => ({ ...l, effective_date: e.target.value }))}
+          />
+        </div>
+
+        {/* Expiry Date */}
+        <div>
+          <div style={fieldLabel}>Expiry Date <span style={{ color: '#4b5563', fontWeight: 400 }}>(blank = open-ended)</span></div>
+          <Input
+            type="date"
+            value={label.expiry_date || ''}
+            onChange={e => setLabel(l => ({ ...l, expiry_date: e.target.value || undefined }))}
+          />
+        </div>
+
+        {/* Sort Order */}
+        <div>
+          <div style={fieldLabel}>Sort Order</div>
+          <InputNumber
+            value={label.sort_order}
+            onChange={v => setLabel(l => ({ ...l, sort_order: v ?? 0 }))}
+            min={0} step={10}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        {/* Flags */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24, paddingTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Switch
+              checked={label.is_required}
+              onChange={v => setLabel(l => ({ ...l, is_required: v }))}
+              size="small"
+            />
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>Required field</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Switch
+              checked={label.is_active}
+              onChange={v => setLabel(l => ({ ...l, is_active: v }))}
+              checkedChildren="Active" unCheckedChildren="Inactive"
+              size="small"
+            />
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Helper styles ─────────────────────────────────────────────────
+const fieldLabel: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: '#6b7280',
+  textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5,
+}
+
+// ════════════════════════════════════════════════════════════════════════════ MAIN TAB COMPONENT
+// Add this function to SystemConfigPage.tsx before the PAGE SHELL comment
+// ══════════════════════════════════════════════════════════════════════════════
+function UserLabelsTab() {
+  const [labels, setLabels]       = useState<UserLabel[]>([])
+  const [loading, setLoading]     = useState(true)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing]     = useState<UserLabel | null>(null)
+  const [activeOnly, setActiveOnly] = useState(true)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await api.get('/system/user-labels', { params: { active_only: activeOnly } })
+      setLabels(Array.isArray(r.data) ? r.data : [])
+    } catch { message.error('Failed to load user labels') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, [activeOnly])
+
+  const handleSave = async (label: UserLabel) => {
+    if (label.id) {
+      await api.put(`/system/user-labels/${label.id}`, label)
+      message.success('Label updated')
+    } else {
+      await api.post('/system/user-labels', label)
+      message.success('Label created')
+    }
+    setModalOpen(false)
+    setEditing(null)
+    load()
+  }
+
+  const handleDelete = async (id: string, name: string) => {
+    try {
+      await api.delete(`/system/user-labels/${id}`)
+      message.success(`Deleted: ${name}`)
+      load()
+    } catch (e: any) { message.error(e?.response?.data?.detail || 'Delete failed') }
+  }
+
+  const cols = [
+    {
+      title: 'Label Key', dataIndex: 'label_key',
+      render: (v: string) => (
+        <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
+          color: '#00d4aa', background: 'rgba(0,212,170,0.08)',
+          padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(0,212,170,0.2)' }}>
+          {v}
+        </span>
+      ),
+    },
+    {
+      title: 'Display Name', dataIndex: 'label_name',
+      render: (v: string, r: UserLabel) => (
+        <div>
+          <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13 }}>{v}</div>
+          {r.description && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 1 }}>{r.description}</div>}
+        </div>
+      ),
+    },
+    {
+      title: 'Type', dataIndex: 'data_type', width: 110,
+      render: (v: string) => <Tag color={TYPE_COLOR[v]} style={{ fontSize: 11, fontWeight: 600 }}>{v}</Tag>,
+    },
+    {
+      title: 'Default', dataIndex: 'default_value', width: 120,
+      render: (v: string, r: UserLabel) => v ? (
+        <span style={{ fontFamily: 'var(--font-mono,monospace)', fontSize: 12, color: '#9ca3af' }}>
+          {r.prefix}{v}{r.suffix}
+        </span>
+      ) : <span style={{ color: '#4b5563', fontSize: 11 }}>—</span>,
+    },
+    {
+      title: 'Dates', width: 180,
+      render: (_: any, r: UserLabel) => (
+        <div style={{ fontSize: 11, color: '#6b7280' }}>
+          <div>From: {r.effective_date}</div>
+          <div>To: {r.expiry_te || 'open'}</div>
+        </div>
+      ),
+    },
+    {
+      title: 'Required', dataIndex: 'is_required', width: 80,
+      render: (v: boolean) => v
+        ? <Tag color="orange" style={{ fontSize: 10 }}>Required</Tag>
+        : <span style={{ fontSize: 11, color: '#4b5563' }}>Optional</span>,
+    },
+    {
+      title: 'Status', dataIndex: 'is_active', width: 90,
+      render: (v: boolean) => <Tag color={v ? 'success' : 'default'}>{v ? 'Active' : 'Inactive'}</Tag>,
+    },
+    {
+      title: '', width: 120,
+      render: (_: any, r: UserLabel) => (
+        <Space size={4}>
+          <Button size="small" icon={<EditOutlined/>}
+            onClick={() => { setEditing(r); setModalOpen(true) }}
+            style={{ borderColor: 'rgba(0,212,170,0.25)', color: '#00d4aa' }}>
+            Edit
+          </Button>
+          <Popconfirm
+            title={`Delete "${r.label_name}"?`}
+            onConfirm={() => handleDelete(r.id!, r.label_name)}
+            okText="Delete" cancelText="Cancel"
+          >
+            <Button size="small" danger icon={<DeleteOutlined/>}/>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  return (
+    <div>
+      {/* Header info */}
+      <div style={{ ...card, borderColor: 'rgba(0,212,170,0.15)', background: 'rgba(0,212,170,0.04)', marginBottom: 20 }}>
+        <div style={{ fontSize: 13, color: '#9ca3af', lineHeight: 1.6 }}>
+          <strong style={{ color: '#00d4aa' }}>User Labels</strong> are system-level configurable inputs
+          available across the entire platform:
+          <ul style={{ margin: '8px 0 0 16px', padding: 0 }}>
+            <li>Referenced in <strong style={{ color: '#e2e8f0' }}>Premium Formula</strong> steps as USER_LABEL parameters</li>
+            <li>Shown as <strong style={{ color: '#e2e8f0' }}>Additional Inputs</strong> on the Evaluate (proposal) page</li>
+            <li>Auto-added as <strong style={{ color: '#e2e8f0' }}>columns</strong> in batch CSV templates</li>
+          </ul>
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Space>
+          <span style={{ fontSize: 12, color: '#6b7280' }}>Show:</span>
+          <Button size="small" type={activeOnly ? 'primary' : 'default'}
+            onClick={() => setActiveOnly(true)}>Active Only</Button>
+          <Button size="small" type={!activeOnly ? 'primary' : 'default'}
+            onClick={() => setActiveOnly(false)}>All Labels</Button>
+        </Space>
+        <Button type="primary" icon={<PlusOutlined/>}
+          onClick={() => { setEditing(null); setModalOpen(true) }}>
+          New User Label
+        </Button>
+      </div>
+
+      {/* Table */}
+      {loading
+        ? <div style={{ textAlign: 'center', padding: 40 }}><Spin size="large"/></div>
+        : labels.length === 0
+          ? <div style={{ ...card, textAlign: 'center', padding: 40 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🏷️</div>
+              <div style={{ color: '#6b7280', fontSize: 13 }}> user labels defined yet</div>
+              <div style={{ color: '#4b5563', fontSize: 12, marginTop: 4 }}>
+                Create labels to use in premium formulas, proposals, and batch uploads
+              </div>
+              <Button type="primary" icon={<PlusOutlined/>} style={{ marginTop: 16 }}
+                onClick={() => { setEditing(null); setModalOpen(true) }}>
+                Create First Label
+              </Button>
+            </div>
+          : <Table dataSource={labels} columns={cols} rowKey="id"
+              size="small" pagination={{ pageSize: 20, showSizeChanger: false }}/>
+      }
+
+      <UserLabelModal
+        open={modalOpen}
+        initial={editing}
+        onSave={handleSave}
+        onClose={() => { setModalOpen(false); setEditing(null) }}
+      />
+    </div>
+  )
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════E SHELL
+// ══════════════════════════════════════════════════════════════════════════════
+export default function SystemConfigPage() {
+  const [configs, setConfigs] = useState<SysConfig[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await api.get('/system/config')
+      setConfigs(Array.isArray(r.data) ? r.data : [])
+    } catch { message.error('Failed to load system config') }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const saveConfig = async (key: string, value: string) => {
+    try {
+      await api.post('/system/config', { config_key: key, config_value: value })
+      message.success(`${key} updated`)
+      setConfigs(prev => {
+        const idx = prev.findIndex(c => c.config_key === key)
+        if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], config_value: value }; return n }
+        return [...prev, { config_key: key, config_value: value }]
+      })
+    } catch { message.error(`Failed to update ${key}`) }
+  }
+
+  // ── Rate Scales inner tabs ───────────────────────────────────────────────
+  const rateScalesTabs = [
+    {
+      key: 'rate-tables',
+      label: <span>📊 Rate Tables</span>,
+      children: <RateTablesTab/>,
+    },
+    {
+      key: 'upload-rates',
+      label: <span><UploadOutlined/> Upload Rates</span>,
+      children: <UploadRatesTab/>,
+    },
+    {
+      key: 'uw-scales',
+      label: <span>⚖️ UW Scales</span>,
+      children: <UWScalesTab/>,
+    },
+  ]
+
+  // ── Reference Data inner tabs ────────────────────────────────────────────
+  const referenceDataTabs = [
+    {
+      key: 'error-codes',
+      label: <span><WarningOutlined/> Error Codes</span>,
+      children: <ErrorCodesTab/>,
+    },
+    {
+      key: 'state-codes',
+      label: <span><EnvironmentOutlined/> State Codes</span>,
+      children: <StateCodesTab/>,
+    },
+  ]
+
+  const tabs = [
+    {
+      key: 'general',
+      label: <span><SettingOutlined/> General</span>,
+      children: <GeneralTab configs={configs} onSave={saveConfig}/>,
+    },
+    {
+      key: 'currency',
+      label: <span><DollarOutlined/> Currency</span>,
+      children: <CurrencyTab configs={configs} onSave={saveConfig}/>,
+    },
+    {
+      key: 'rate-scales',
+      label: <span>📊 Rate Scales</span>,
+      children: (
+        <Tabs
+          defaultActiveKey="rate-tables"
+          items={rateScalesTabs}
+          size="small"
+          tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:20 }}
+        />
+      ),
+    },
+    {
+      key: 'letter-templates',
+      label: <span><FileTextOutlined/> Templates</span>,
+      children: <LetterTemplatesTab/>,
+    },
+    {
+      key: 'smtp',
+    label: <span><MailOutlined/> SMTP / Email</span>,
+      children: <SMTPTab/>,
+    },
+    {
+      key: 'apikeys',
+      label: <span><KeyOutlined/> API Keys</span>,
+      children: <APIKeysTab configs={configs} onSave={saveConfig}/>,
+    },
+    {
+      key: 'reference-data',
+      label: <span>📋 Reference Data</span>,
+      children: (
+        <Tabs
+          defaultActiveKey="error-codes"
+          items={referenceDataTabs}
+          size="small"
+          tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:20 }}
+        />
+      ),
+    },
+    {
+      key: 'notifications',
+      label: <span><BellOutlined/> Notifications</span>,
+      children: <NotificationsTab configs={configs} onSave={saveConfig}/>,
+    },
+    {
+      key: 'user-labels',
+      label: <span>🏷️ User Labels</span>,
+      children: <UserLabelsTab/>,
+    },
+    {
+      key: 'gst-modal',
+      label: <span>💰 GST & Modal Factors</span>,
+      children: (
+        <div style={{ padding: '8px 0' }}>
+          <GSTModalConfigTab />
+        </div>
+      ),
+    },
+    {
+      key: 'physicians',
+      label: <span>🩺 Physician Registry</span>,
+      children: <PhysicianRegistryTab />,
+    },
+  ]
+
+  return (
+    <div style={{ padding:'32px 36px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
+        <div>
+          <h1 style={{ fontWeight:700, fontSize:20, color:'#e2e8f0', margin:0, letterSpacing:'-0.02em', display:'flex', alignItems:'center', gap:10 }}>
+            <SettingOutlined style={{ color:'#00d4aa' }}/>System Configuration
+          </h1>
+          <p style={{ color:'#6b7280', fontSize:13, marginTop:4, marginBottom:0 }}>
+            Platform settings · SMTP · rate scales · currency · reference data · user labels
+          </p>
+        </div>
+        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}
+          style={{ borderColor:'rgba(255,255,255,0.12)', color:'#9ca3af' }}>Refresh</Button>
+      </div>
+
+      {loading
+        ? <div style={{ display:'flex', justifyContent:'center', paddingTop:60 }}><Spin size="large"/></div>
+        : <Tabs defaultActiveKey="general" items={tabs}
+            tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:24 }}/>
+      }
+    </div>
+  )
+}
+
+

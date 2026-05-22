@@ -1,0 +1,54 @@
+# systemd/riskuw-api.service
+# ─────────────────────────────────────────────────────────────────────────────
+# Install: sudo cp systemd/riskuw-api.service /etc/systemd/system/
+#          sudo systemctl daemon-reload
+#          sudo systemctl enable --now riskuw-api
+# ─────────────────────────────────────────────────────────────────────────────
+
+[Unit]
+Description=RiskUW FastAPI Underwriting Backend
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=exec
+User=uw_user
+Group=uw_user
+WorkingDirectory=/opt/riskuw/backend
+
+# Load secrets from .env (never commit this file)
+EnvironmentFile=/opt/riskuw/.env
+
+ExecStart=/opt/riskuw/venv/bin/uvicorn main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info \
+    --access-log \
+    --proxy-headers \
+    --forwarded-allow-ips="127.0.0.1"
+
+# Graceful shutdown — wait up to 30s for in-flight requests
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Auto-restart on failure (not on clean exit)
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Logging → journald (use: journalctl -u riskuw-api -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=riskuw-api
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/riskuw/logs /tmp
+
+[Install]
+WantedBy=multi-user.target

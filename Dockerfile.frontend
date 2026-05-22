@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dockerfile.frontend
+# Multi-stage build:
+#   Stage 1 — Node: installs deps and runs `npm run build`
+#   Stage 2 — nginx:alpine: serves the built static files
+#
+# The nginx inside this container listens on port 80 (internal only).
+# Host nginx proxies to it and handles SSL.
+#
+# Place this file at: /opt/riskuw/Dockerfile.frontend
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: build ────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install deps (cached unless package-lock.json changes)
+COPY frontend/package*.json ./
+RUN npm ci --frozen-lockfile
+
+# Copy source and build
+# VITE_API_BASE is injected at build time via --build-arg
+ARG VITE_API_BASE=https://riskuw.online
+ENV VITE_API_BASE=$VITE_API_BASE
+
+COPY frontend/ ./
+RUN npm run build
+# Output: /app/dist
+
+
+# ── Stage 2: serve ────────────────────────────────────────────────────────────
+FROM nginx:1.27-alpine
+
+# Remove default nginx page
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy built React app
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# nginx config for SPA (React Router) + API proxy
+COPY docker/nginx-frontend.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q --spider http://localhost/index.html || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

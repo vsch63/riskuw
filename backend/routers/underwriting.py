@@ -1,0 +1,601 @@
+"""
+backend/routers/underwriting.py
+─────────────────────────────────
+POST /underwriting/evaluate   — single-application decision
+GET  /underwriting/cases      — paginated case history
+
+Tables: application · uw_case · uw_decision · policy_admin_queue
+        audit_trail
+
+The evaluate endpoint delegates the actual rules engine to
+services/uw_engine.py.  This router handles HTTP, DB persistence,
+and audit logging.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from datetime import date, datetime, timezone
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from deps import CurrentUser
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/underwriting", tags=["underwriting"])
+
+
+def _get_db():
+    from database import get_conn, release_conn
+    return get_conn(), release_conn
+
+
+# ── Evaluate request schema ───────────────────────────────────────────────────
+
+class BuildInfo(BaseModel):
+    height_inches: float | None = None
+    weight_lbs: float | None = None
+
+class BloodPressure(BaseModel):
+    systolic: int | None = None
+    diastolic: int | None = None
+    on_medication: bool = False
+    medication_count: int = 0
+
+class FinancialInfo(BaseModel):
+    annual_income: float = 0
+    existing_life_coverage: float = 0
+
+class FamilyHistory(BaseModel):
+    cardiovascular_before_60: bool = False
+    stroke_before_65: bool = False
+    cancer_history: bool = False
+    diabetes_history: bool = False
+
+class DrivingRecord(BaseModel):
+    dui_dwi_count_5yr: int = 0
+    major_violations_3yr: int = 0
+    minor_violations_3yr: int = 0
+    at_fault_accidents_3yr: int = 0
+    license_suspended: bool = False
+
+class LabValues(BaseModel):
+    total_cholesterol: float | None = None
+    hdl: float | None = None
+    ldl: float | None = None
+    egfr: float | None = None
+
+class EvaluateRequest(BaseModel):
+    applicant_ref: str = "APP-001"
+    age: int
+    gender: str
+    state: str = "MH"
+    product_type: str = "INDIVIDUAL_TERM"
+    product_code: str
+    face_amount: float
+    coverage_term_yrs: int = 20
+    policy_effective_date: str | None = None
+    policy_expire_date: str | None = None
+    # Medical
+    tobacco_status: str = "NEVER"
+    tobacco_quit_years: float | None = None
+    heart_condition: str = "NONE"
+    heart_event_years_ago: float | None = None
+    diabetes_type: str = "NONE"
+    diabetes_dx_age: int | None = None
+    a1c: float | None = None
+    hiv_positive: bool = False
+    cirrhosis: bool = False
+    stroke_history: bool = False
+    kidney_disease: bool = False
+    depression_history: bool = False
+    depression_hospitalized: bool = False
+    epilepsy: bool = False
+    copd: bool = False
+    occupation_class: str = "1"
+    occupation_title: str = ""
+    alcohol_drinks_week: int = 0
+    hazardous_activity: bool = False
+    hazard_types: list[str] = []
+    # Nested
+    build: BuildInfo | None = None
+    blood_pressure: BloodPressure | None = None
+    lab_values: LabValues | None = None
+    financial: FinancialInfo | None = None
+    family_history: FamilyHistory | None = None
+    driving_record: DrivingRecord | None = None
+    # height/weight at top level (legacy format)
+    height_inches: float | None = None
+    weight_lbs: float | None = None
+    systolic_bp: int | None = None
+    diastolic_bp: int | None = None
+    annual_income: float | None = None
+    existing_coverage: float | None = None
+
+
+# ── UW Scale evaluation helper ────────────────────────────────────────────────
+
+def _evaluate_uw_scales(conn, product_code: str, applicant: dict) -> tuple[int, list]:
+    """
+    Look up all UW-type scales attached to this product.
+    For each scale, find the matching tranche (by parameter conditions),
+    then look up the age-band output value (debit points).
+
+    Returns (total_scale_debits, scale_rules_fired).
+    Failure in scale lookup never breaks the decision — errors are logged
+    as zero-debit rule entries.
+    """
+    today = date.today()
+    total = 0
+    fired = []
+
+    try:
+        cur = conn.cursor()
+
+        # Get all active UW scales attached to this product
+        cur.execute(
+            """
+            SELECT s.id::text, s.name
+            FROM uw_product_scale ps
+            JOIN uw_rate_scale s ON s.id = ps.scale_id
+            WHERE ps.product_code = %s
+              AND s.scale_type = 'UW'
+              AND s.is_active = true
+            ORDER BY s.name
+            """,
+            (product_code,),
+        )
+        scales = cur.fetchall()
+
+        for scale_row in scales:
+            scale_id   = str(scale_row[0])
+            scale_name = str(scale_row[1])
+
+            # Get tranches valid today
+            cur.execute(
+                """
+                SELECT id::text, description, parameter_logic
+                FROM uw_scale_tranche
+                WHERE scale_id = %s::uuid
+                  AND effective_date <= %s
+                  AND (expiry_date IS NULL OR expiry_date >= %s)
+                ORDER BY sort_order
+                """,
+                (scale_id, today, today),
+            )
+            tranches = cur.fetchall()
+
+            matched = []
+            for t in tranches:
+                tid   = str(t[0])
+                tdesc = str(t[1])
+                logic = str(t[2])
+
+                # Get parameters for this tranche
+                cur.execute(
+                    """
+                    SELECT parameter_name, min_value, max_value
+                    FROM uw_tranche_parameter
+                    WHERE tranche_id = %s::uuid
+                    ORDER BY sort_order
+                    """,
+                    (tid,),
+                )
+                params  = cur.fetchall()
+                results = []
+
+                for p in params:
+                    pname   = str(p[0])
+                    min_v   = float(p[1]) if p[1] is not None else None
+                    max_v   = float(p[2]) if p[2] is not None else None
+
+                    # Map applicant fields to parameter names
+                    app_val = applicant.get(pname)
+
+                    # Handle nested/aliased fields
+                    if app_val is None:
+                        aliases = {
+                            "gender":           lambda a: 1 if str(a.get("gender","")).upper() in ("M","MALE") else 2,
+                            "smoker":           lambda a: 1 if a.get("tobacco_status","NEVER") not in ("NEVER","NON_TOBACCO") else 0,
+                            "bmi":              lambda a: _calc_bmi(a),
+                            "bp_systolic":      lambda a: a.get("systolic_bp") or (a.get("blood_pressure") or {}).get("systolic"),
+                            "bp_diastolic":     lambda a: a.get("diastolic_bp") or (a.get("blood_pressure") or {}).get("diastolic"),
+                            "occupation_class": lambda a: int(a.get("occupation_class", 1)) if str(a.get("occupation_class","1")).isdigit() else 1,
+                            "policy_term":      lambda a: a.get("coverage_term_yrs"),
+                            "sum_assured":      lambda a: a.get("face_amount"),
+                            "family_history":   lambda a: 1 if (a.get("family_history") or {}).get("cardiovascular_before_60") else 0,
+                        }
+                        if pname in aliases:
+                            try:
+                                app_val = aliases[pname](applicant)
+                            except Exception:
+                                app_val = None
+
+                    if app_val is None:
+                        results.append(False)
+                        continue
+
+                    try:
+                        app_val = float(app_val)
+                    except (TypeError, ValueError):
+                        results.append(False)
+                        continue
+
+                    ok = True
+                    if min_v is not None and app_val < min_v: ok = False
+                    if max_v is not None and app_val > max_v: ok = False
+                    results.append(ok)
+
+                if not results:
+                    continue
+
+                tranche_matched = all(results) if logic == "AND" else any(results)
+                if tranche_matched:
+                    matched.append((tid, tdesc))
+
+            # Multiple matches = config error
+            if len(matched) > 1:
+                fired.append({
+                    "rule_id":      f"SCALE-CFG-ERR",
+                    "rule_name":    f"Scale config error: {len(matched)} tranches matched in '{scale_name}' — fix overlapping tranches",
+                    "debit_points": 0,
+                    "category":     "SCALE_CONFIG_ERROR",
+                })
+                continue
+
+            # Single match — look up age-band output
+            if len(matched) == 1:
+                tid, tdesc = matched[0]
+                age = applicant.get("age")
+                if age is not None:
+                    cur.execute(
+                        """
+                        SELECT value FROM uw_tranche_detail
+                        WHERE tranche_id = %s::uuid
+                          AND age_from <= %s AND age_to >= %s
+                        ORDER BY sort_order LIMIT 1
+                        """,
+                        (tid, int(age), int(age)),
+                    )
+                    detail = cur.fetchone()
+                    if detail:
+                        pts = int(float(detail[0]))
+                        total += pts
+                        fired.append({
+                            "rule_id":      f"SCALE-{scale_name[:25]}",
+                            "rule_name":    f"UW Scale: {scale_name} → {tdesc}",
+                            "debit_points": pts,
+                            "category":     "UW_SCALE",
+                        })
+
+        cur.close()
+
+    except Exception as e:
+        # Scale failure must never crash the decision
+        fired.append({
+            "rule_id":      "SCALE-ERROR",
+            "rule_name":    f"UW Scale lookup error: {str(e)[:100]}",
+            "debit_points": 0,
+            "category":     "SCALE_ERROR",
+        })
+
+    return total, fired
+
+
+def _calc_bmi(applicant: dict) -> float | None:
+    """Calculate BMI from height/weight fields."""
+    build = applicant.get("build") or {}
+    h = applicant.get("height_inches") or build.get("height_inches")
+    w = applicant.get("weight_lbs")    or build.get("weight_lbs")
+    if h and w and float(h) > 0:
+        return round((float(w) / (float(h) ** 2)) * 703, 1)
+    return None
+
+
+# ── Evaluate ──────────────────────────────────────────────────────────────────
+
+@router.post("/evaluate")
+def evaluate(body: EvaluateRequest, current: CurrentUser):
+    """
+    Run the underwriting rules engine and persist the decision.
+    Delegates to services.uw_engine.run_evaluation() if available,
+    otherwise uses the built-in fallback engine with UW scale integration.
+    """
+    try:
+        from services.uw_engine import run_evaluation
+        result = run_evaluation(body.model_dump(), current.username, current.tenant_id)
+    except ImportError:
+        result = _fallback_evaluate(body, current)
+
+    _persist_to_queue(body, result, current)
+    return result
+
+
+def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
+    """
+    Built-in rules evaluation with UW Scale integration.
+    1. Runs hardcoded medical/lifestyle rules → base debit points
+    2. Looks up UW scales attached to product → scale debit points
+    3. Sums both → compares against product thresholds → decision
+    """
+    conn, release = _get_db()
+    try:
+        import psycopg2.extras
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
+        cur = conn.cursor()
+
+        # ── Load thresholds ───────────────────────────────────────────────────
+        cur.execute(
+            """
+            SELECT stp_threshold, refer_threshold, decline_threshold
+            FROM product_decision_thresholds
+            WHERE product_code = %s ORDER BY created_at DESC LIMIT 1
+            """,
+            (body.product_code,),
+        )
+        row = cur.fetchone()
+        if row:
+            thresholds = dict(row)
+        else:
+            # Fall back to product-level thresholds
+            cur.execute(
+                "SELECT stp_threshold, refer_threshold, decline_threshold FROM products WHERE product_code=%s",
+                (body.product_code,),
+            )
+            row2 = cur.fetchone()
+            thresholds = dict(row2) if row2 else {
+                "stp_threshold": 75, "refer_threshold": 150, "decline_threshold": 200
+            }
+        cur.close()
+
+        debits      = 0
+        rules_fired = []
+
+        # ── Hard stops ────────────────────────────────────────────────────────
+        if body.hiv_positive:
+            return _hard_decline("HIV positive — hard stop on all individual products", body, "INSTANT_DECLINE")
+        if body.cirrhosis:
+            return _hard_decline("Liver cirrhosis — hard stop", body, "INSTANT_DECLINE")
+        if body.occupation_class == "D":
+            return _hard_decline("Declined occupation class", body, "INSTANT_DECLINE")
+
+        # Age check
+        cur2 = conn.cursor()
+        cur2.execute("SELECT min_age, max_age FROM products WHERE product_code=%s", (body.product_code,))
+        prod = cur2.fetchone()
+        cur2.close()
+        if prod:
+            min_age = prod.get("min_age", 18) if hasattr(prod, "get") else prod[0]
+            max_age = prod.get("max_age", 70) if hasattr(prod, "get") else prod[1]
+            if body.age < min_age or body.age > max_age:
+                return _hard_decline(
+                    f"Age {body.age} outside product eligibility ({min_age}–{max_age})",
+                    body, "INSTANT_DECLINE",
+                )
+
+        # ── Hardcoded medical rules ───────────────────────────────────────────
+        if body.tobacco_status in ("SMOKER", "CIGAR", "CHEW", "VAPE"):
+            debits += 50
+            rules_fired.append({"rule_id": "R005", "rule_name": "Tobacco user", "debit_points": 50, "category": "MEDICAL"})
+
+        bmi = _calc_bmi(body.model_dump())
+        if bmi:
+            if bmi > 35:
+                debits += 75
+                rules_fired.append({"rule_id": "R010", "rule_name": f"Elevated BMI ({bmi:.1f})", "debit_points": 75, "category": "BUILD"})
+            elif bmi > 30:
+                debits += 25
+                rules_fired.append({"rule_id": "R010", "rule_name": f"Elevated BMI ({bmi:.1f})", "debit_points": 25, "category": "BUILD"})
+
+        if body.diabetes_type == "TYPE1":
+            debits += 100
+            rules_fired.append({"rule_id": "R015", "rule_name": "Type 1 diabetes", "debit_points": 100, "category": "MEDICAL"})
+        elif body.diabetes_type == "TYPE2":
+            debits += 50
+            rules_fired.append({"rule_id": "R015", "rule_name": "Type 2 diabetes", "debit_points": 50, "category": "MEDICAL"})
+
+        if body.heart_condition in ("MI", "CABG", "STENT"):
+            yrs = body.heart_event_years_ago or 0
+            pts = 125 if yrs < 2 else 75 if yrs < 5 else 40
+            debits += pts
+            rules_fired.append({"rule_id": "R020", "rule_name": f"Cardiac: {body.heart_condition}", "debit_points": pts, "category": "MEDICAL"})
+
+        bp  = body.blood_pressure
+        sys = (bp.systolic if bp else None) or body.systolic_bp
+        if sys and sys >= 160:
+            debits += 50
+            rules_fired.append({"rule_id": "R025", "rule_name": "Uncontrolled hypertension", "debit_points": 50, "category": "MEDICAL"})
+        elif sys and sys >= 140:
+            debits += 25
+            rules_fired.append({"rule_id": "R025", "rule_name": "Stage 2 hypertension", "debit_points": 25, "category": "MEDICAL"})
+
+        if (body.driving_record.dui_dwi_count_5yr if body.driving_record else 0) >= 2:
+            return _hard_decline("2+ DUI/DWI convictions in last 5 years", body, "INSTANT_DECLINE")
+
+        if body.alcohol_drinks_week and body.alcohol_drinks_week >= 22:
+            debits += 50
+            rules_fired.append({"rule_id": "R040", "rule_name": "Heavy alcohol use", "debit_points": 50, "category": "LIFESTYLE"})
+
+        if body.hazardous_activity:
+            debits += 30
+            rules_fired.append({"rule_id": "R045", "rule_name": "Hazardous activity", "debit_points": 30, "category": "LIFESTYLE"})
+
+        fh = body.family_history
+        if fh and fh.cardiovascular_before_60:
+            debits += 15
+            rules_fired.append({"rule_id": "R050", "rule_name": "Family history CVD", "debit_points": 15, "category": "FAMILY"})
+
+        if body.age > 55:
+            debits += 30
+            rules_fired.append({"rule_id": "R001", "rule_name": "Age loading 56+", "debit_points": 30, "category": "AGE"})
+        elif body.age > 45:
+            debits += 15
+            rules_fired.append({"rule_id": "R001", "rule_name": "Age loading 46–55", "debit_points": 15, "category": "AGE"})
+
+        # ── UW Scale integration ──────────────────────────────────────────────
+        # Build applicant dict for scale parameter matching
+        applicant_dict = body.model_dump()
+        applicant_dict["age"] = body.age
+
+        scale_debits, scale_rules = _evaluate_uw_scales(conn, body.product_code, applicant_dict)
+        debits      += scale_debits
+        rules_fired += scale_rules
+
+        # ── Determine outcome ─────────────────────────────────────────────────
+        stp_t     = thresholds.get("stp_threshold",     75)
+        refer_t   = thresholds.get("refer_threshold",  150)
+        decline_t = thresholds.get("decline_threshold", 200)
+
+        if debits > decline_t:
+            outcome    = "DECLINED"
+            risk_class = "DECLINE"
+            is_stp     = False
+            pathway    = "INSTANT_DECLINE"
+        elif debits > refer_t:
+            outcome    = "REFERRED"
+            risk_class = "SUBSTANDARD"
+            is_stp     = False
+            pathway    = "REFERRED"
+        elif debits > stp_t:
+            outcome    = "APPROVED_RATED"
+            risk_class = "SUBSTANDARD"
+            is_stp     = False
+            pathway    = "ACCELERATED"
+        else:
+            outcome    = "APPROVED_STP"
+            risk_class = "STANDARD" if debits > 25 else "PREFERRED"
+            is_stp     = True
+            pathway    = "STRAIGHT_THROUGH"
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        # ── Premium calculation ───────────────────────────────────────────────
+        approved_premium = None
+        premium_detail   = None
+
+        if outcome in ("APPROVED_STP", "APPROVED_RATED"):
+            try:
+                from services.premium_engine import PremiumEngine
+                engine    = PremiumEngine(conn)
+                prem      = engine.calculate(
+                    product_code = body.product_code,
+                    applicant    = body.model_dump(),
+                    uw_result    = {
+                        "net_debit_points": debits,
+                        "risk_class":       risk_class,
+                    },
+                    mode         = "ANNUAL",
+                    formula_type = "BASE_PREMIUM",
+                )
+                if not prem.get("error") and prem.get("formula_found"):
+                    approved_premium = prem.get("annual_premium")
+                    premium_detail   = {
+                        "annual_premium":    prem.get("annual_premium"),
+                        "monthly_premium":   prem.get("all_modes", {}).get("MONTHLY", {}).get("modal_premium"),
+                        "quarterly_premium": prem.get("all_modes", {}).get("QUARTERLY", {}).get("modal_premium"),
+                        "half_yearly_premium": prem.get("all_modes", {}).get("HALF_YEARLY", {}).get("modal_premium"),
+                        "total_first_year":  prem.get("all_modes", {}).get("ANNUAL", {}).get("total_first_year"),
+                        "total_renewal":     prem.get("all_modes", {}).get("ANNUAL", {}).get("total_renewal"),
+                        "all_modes":         prem.get("all_modes"),
+                        "steps":             prem.get("steps_executed"),
+                        "formula_name":      prem.get("formula_name"),
+                    }
+            except Exception as e:
+                logger.warning(f"Premium calculation failed: {e}")
+                premium_detail = {"error": str(e)}
+
+        return {
+            "outcome":            outcome,
+            "risk_class":         risk_class,
+            "net_debit_points":   debits,
+            "base_debit_points":  debits - scale_debits,
+            "scale_debit_points": scale_debits,
+            "rules_fired":        rules_fired,
+            "is_stp":             is_stp,
+            "pathway":            pathway,
+            "application_id":     body.applicant_ref,
+            "evaluated_at":       now,
+            "rules_version":      "fallback-2.0-with-scales",
+            "thresholds_used":    thresholds,
+            "approved_premium":   approved_premium,
+            "premium_detail":     premium_detail,
+        }
+    finally:
+        release(conn)
+
+
+def _hard_decline(reason: str, body: EvaluateRequest, pathway: str) -> dict:
+    return {
+        "outcome":             "DECLINED",
+        "risk_class":          "DECLINE",
+        "net_debit_points":    999,
+        "base_debit_points":   999,
+        "scale_debit_points":  0,
+        "rules_fired":         [{"rule_name": reason, "debit_points": 999, "category": "HARD_STOP"}],
+        "is_stp":              False,
+        "pathway":             pathway,
+        "adverse_action_text": reason,
+        "application_id":      body.applicant_ref,
+        "evaluated_at":        datetime.now(timezone.utc).isoformat(),
+        "rules_version":       "fallback-2.0-with-scales",
+    }
+
+
+def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser):
+    """Write result to policy_admin_queue so dashboard and cases page show it."""
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO policy_admin_queue
+                (applicant_ref, product_code, face_amount, age, gender, state,
+                 outcome, risk_class, net_debit_points, approved_premium,
+                 decision_date, source, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ONLINE', 'UNPROCESSED')
+            """,
+            (
+                body.applicant_ref, body.product_code, body.face_amount,
+                body.age, body.gender, body.state,
+                result.get("outcome"), result.get("risk_class"),
+                result.get("net_debit_points", 0),
+                result.get("approved_premium"),
+            ),
+        )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.warning(f"_persist_to_queue failed: {e}", exc_info=True)
+        # queue write failure must never break the decision response
+    finally:
+        release(conn)
+
+
+# ── Case history ──────────────────────────────────────────────────────────────
+
+@router.get("/cases")
+def list_cases(current: CurrentUser, page_size: int = 50, page: int = 1):
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        offset = (page - 1) * page_size
+        cur.execute(
+            """
+            SELECT id, applicant_ref, product_code, face_amount, age, gender,
+                   outcome, risk_class, net_debit_points, status,
+                   decision_date AS created_at
+            FROM policy_admin_queue
+            ORDER BY decision_date DESC
+            LIMIT %s OFFSET %s
+            """,
+            (page_size, offset),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [dict(r) for r in rows]
+    finally:
+        release(conn)

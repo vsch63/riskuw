@@ -1,0 +1,12 @@
+
+/* Form help text visibility on dark theme */
+.ant-form-item-explain-error,
+.ant-form-item-explain {
+  color: #9ca3af !important;
+  font-size: 11px !important;
+  margin-top: 3px !important;
+}
+
+.ant-form-item-explain-success {
+  color: #00d4aa !important;
+}

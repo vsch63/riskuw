@@ -1,0 +1,49 @@
+# requirements.txt — FastAPI backend
+# Pin ALL versions for reproducible builds on Hetzner.
+# Update with: pip-compile requirements.in
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12        # form data / file upload
+httpx==0.28.0                   # async HTTP client (healthchecks, webhooks)
+
+# ── Database ─────────────────────────────────────────────────────────────────
+psycopg2-binary==2.9.10         # PostgreSQL adapter
+# psycopg2==2.9.10              # use this (not binary) in production for perf
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+bcrypt==4.2.1
+python-jose[cryptography]==3.3.0  # JWT encode/decode
+pyotp==2.9.0                    # TOTP MFA
+
+# ── Data validation ──────────────────────────────────────────────────────────
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+
+# ── Config / env ─────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+
+# ── PDF generation ───────────────────────────────────────────────────────────
+weasyprint==63.0                # HTML → PDF for decision reports
+
+# ── Excel / CSV (batch upload) ────────────────────────────────────────────────
+openpyxl==3.1.5
+xlrd==2.0.1                     # .xls support (legacy batch files)
+pandas==2.2.3
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+# stdlib smtplib is used directly — no extra dep needed
+
+# ── QR code (MFA setup) ───────────────────────────────────────────────────────
+qrcode[pil]==8.0
+Pillow==10.4.0
+
+# ── Logging / observability ───────────────────────────────────────────────────
+# stdlib logging used with custom JsonFormatter — no extra dep
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.0                   # TestClient

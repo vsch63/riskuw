@@ -1,0 +1,495 @@
+"""
+routers/premium_formula.py
+"""
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import date
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from deps import CurrentUser
+
+router = APIRouter(prefix="/premium-formula", tags=["Premium Formula"])
+
+ADMIN_ROLES = {"admin", "super_admin"}
+
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+def _valid_uuid(v: str) -> bool:
+    return bool(UUID_RE.match(v))
+
+def _get_db():
+    from database import get_conn, release_conn
+    import psycopg2.extras
+    conn = get_conn()
+    conn.cursor_factory = psycopg2.extras.RealDictCursor
+    if not conn.autocommit:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    return conn, release_conn
+
+def _rows(rs) -> list[dict]:
+    return [dict(r) for r in rs]
+
+def _row(r) -> dict:
+    return dict(r) if r else {}
+
+
+# ── Schemas ───────────────────────────────────────────────────────────────────
+
+class FormulaIn(BaseModel):
+    formula_name:   str
+    description:    Optional[str] = None
+    formula_type:   str = "BASE_PREMIUM"
+    is_active:      bool = True
+    effective_date: date = date.today()
+    expiry_date:    Optional[date] = None
+
+
+class StepIn(BaseModel):
+    seq_no:         int
+    description:    Optional[str] = None
+    operator:       str
+    factor:         float = 1.0
+    parameter_type: str
+    user_value:     Optional[float] = None
+    user_label:     Optional[str]   = None
+    scale_id:       Optional[str]   = None
+
+
+class ModalFactorIn(BaseModel):
+    annual:       float = 1.0000
+    half_yearly:  float = 0.5100
+    quarterly:    float = 0.2600
+    monthly:      float = 0.0900
+
+
+class GSTConfigIn(BaseModel):
+    first_year_rate: float = 18.0
+    renewal_rate:    float = 5.0
+
+
+class CalculateIn(BaseModel):
+    age:               int
+    gender:            str
+    face_amount:       float
+    tobacco_status:    str = "NEVER"
+    coverage_term_yrs: int = 20
+    height_inches:     Optional[float] = None
+    weight_lbs:        Optional[float] = None
+    systolic_bp:       Optional[int]   = None
+    occupation_class:  str = "1"
+    annual_income:     Optional[float] = None
+    mode:              str = "ANNUAL"
+    net_debit_points:  int = 0
+    risk_class:        str = "STANDARD"
+    formula_type:      str = "BASE_PREMIUM"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FIXED-SEGMENT ROUTES — must be registered BEFORE /{formula_id} wildcards
+# ═════════════════════════════════════════════════════════════════════════════
+
+@router.get("/{product_code}/modal-factors")
+def get_modal_factors(product_code: str, user: CurrentUser = CurrentUser):
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT mode, factor::float AS factor FROM premium_modal_factor WHERE product_code=%s ORDER BY mode",
+            (product_code,),
+        )
+        rows = _rows(cur.fetchall())
+        cur.close()
+        return rows
+    except Exception as exc:
+        import traceback, logging
+        logging.getLogger("uw_platform").error(
+            f"get_modal_factors ERROR: {traceback.format_exc()}"
+        )
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.put("/{product_code}/modal-factors")
+def update_modal_factors(product_code: str, body: ModalFactorIn, user: CurrentUser = CurrentUser):
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        for mode, factor in [
+            ("ANNUAL",      body.annual),
+            ("HALF_YEARLY", body.half_yearly),
+            ("QUARTERLY",   body.quarterly),
+            ("MONTHLY",     body.monthly),
+        ]:
+            cur.execute(
+                """
+                INSERT INTO premium_modal_factor (product_code, mode, factor)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (product_code, mode) DO UPDATE SET factor=EXCLUDED.factor
+                """,
+                (product_code, mode, factor),
+            )
+        conn.commit()
+        cur.close()
+        return {"message": "Modal factors updated"}
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.get("/{product_code}/gst")
+def get_gst(product_code: str, user: CurrentUser = CurrentUser):
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT product_code, first_year_rate::float, renewal_rate::float FROM premium_gst_config WHERE product_code=%s",
+            (product_code,)
+        )
+        row = cur.fetchone()
+        cur.close()
+        if row:
+            return _row(row)
+        # ✅ Return safe default — no crash on None
+        return {
+            "product_code": product_code,
+            "first_year_rate": 18.0,
+            "renewal_rate": 5.0
+        }
+    finally:
+        release(conn)
+
+@router.put("/{product_code}/gst")
+def update_gst(product_code: str, body: GSTConfigIn, user: CurrentUser = CurrentUser):
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO premium_gst_config (product_code, first_year_rate, renewal_rate)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (product_code) DO UPDATE
+            SET first_year_rate=EXCLUDED.first_year_rate,
+                renewal_rate=EXCLUDED.renewal_rate
+            """,
+            (product_code, body.first_year_rate, body.renewal_rate),
+        )
+        conn.commit()
+        cur.close()
+        return {"message": "GST config updated"}
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.get("/{product_code}/user-labels")
+def get_user_labels(product_code: str, user: CurrentUser = CurrentUser):
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT s.user_label, s.user_value AS default_value, s.description
+            FROM premium_formula_step s
+            JOIN premium_formula f ON f.id = s.formula_id
+            WHERE f.product_code = %s
+              AND f.formula_type = 'BASE_PREMIUM'
+              AND f.is_active = true
+              AND f.effective_date <= CURRENT_DATE
+              AND (f.expiry_date IS NULL OR f.expiry_date >= CURRENT_DATE)
+              AND s.parameter_type = 'USER_LABEL'
+              AND s.user_label IS NOT NULL
+            ORDER BY s.seq_no
+            """,
+            (product_code,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        result = []
+        for r in rows:
+            if isinstance(r, tuple):
+                result.append({"user_label": r[0], "default_value": r[1], "description": r[2]})
+            else:
+                result.append(dict(r))
+        return result
+    finally:
+        release(conn)
+
+
+@router.post("/{product_code}/calculate")
+def test_calculate(product_code: str, body: CalculateIn, user: CurrentUser = CurrentUser):
+    conn, release = _get_db()
+    try:
+        from services.premium_engine import PremiumEngine
+        engine = PremiumEngine(conn)
+        applicant = body.model_dump()
+        uw_result = {
+            "net_debit_points": body.net_debit_points,
+            "risk_class":       body.risk_class,
+        }
+        result = engine.calculate(
+            product_code=product_code,
+            applicant=applicant,
+            uw_result=uw_result,
+            mode=body.mode,
+            formula_type=body.formula_type,
+        )
+        return result
+    finally:
+        release(conn)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WILDCARD ROUTES — after all fixed-segment routes
+# ═════════════════════════════════════════════════════════════════════════════
+
+@router.get("/{product_code}")
+def list_formulas(product_code: str, user: CurrentUser = CurrentUser):
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT f.*, COUNT(s.id) AS step_count
+            FROM premium_formula f
+            LEFT JOIN premium_formula_step s ON s.formula_id = f.id
+            WHERE f.product_code = %s
+            GROUP BY f.id
+            ORDER BY f.formula_type, f.effective_date DESC
+            """,
+            (product_code,),
+        )
+        rows = _rows(cur.fetchall())
+        cur.close()
+        return rows
+    finally:
+        release(conn)
+
+
+@router.get("/{product_code}/{formula_id}")
+def get_formula(product_code: str, formula_id: str, user: CurrentUser = CurrentUser):
+    if not _valid_uuid(formula_id):
+        raise HTTPException(status_code=404, detail="Formula not found")
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM premium_formula WHERE id=%s::uuid AND product_code=%s",
+            (formula_id, product_code),
+        )
+        formula = _row(cur.fetchone())
+        if not formula:
+            raise HTTPException(status_code=404, detail="Formula not found")
+        cur.execute(
+            """
+            SELECT s.id, s.formula_id, s.seq_no, s.description,
+                   s.operator, s.factor::float AS factor,
+                   s.parameter_type,
+                   s.user_value::float AS user_value,
+                   s.user_label, s.scale_id,
+                   r.name AS scale_name
+            FROM premium_formula_step s
+            LEFT JOIN uw_rate_scale r ON r.id = s.scale_id
+            WHERE s.formula_id = %s::uuid
+            ORDER BY s.seq_no
+            """,
+            (formula_id,),
+        )
+        formula["steps"] = _rows(cur.fetchall())
+        cur.close()
+        return formula
+    finally:
+        release(conn)
+
+
+@router.post("/{product_code}", status_code=201)
+def create_formula(product_code: str, body: FormulaIn, user: CurrentUser = CurrentUser):
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        formula_id = str(uuid.uuid4())
+        cur.execute(
+            """
+            INSERT INTO premium_formula
+                (id, product_code, formula_name, description, formula_type,
+                 is_active, effective_date, expiry_date, created_by, updated_by)
+            VALUES (%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (formula_id, product_code, body.formula_name, body.description,
+             body.formula_type, body.is_active, body.effective_date,
+             body.expiry_date, user.username, user.username),
+        )
+        conn.commit()
+        cur.close()
+        return {"formula_id": formula_id, "message": "Formula created"}
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.put("/{product_code}/{formula_id}")
+def update_formula(product_code: str, formula_id: str, body: FormulaIn, user: CurrentUser = CurrentUser):
+    if not _valid_uuid(formula_id):
+        raise HTTPException(status_code=404, detail="Formula not found")
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE premium_formula
+            SET formula_name=%s, description=%s, formula_type=%s,
+                is_active=%s, effective_date=%s, expiry_date=%s, updated_by=%s
+            WHERE id=%s::uuid AND product_code=%s
+            """,
+            (body.formula_name, body.description, body.formula_type,
+             body.is_active, body.effective_date, body.expiry_date,
+             user.username, formula_id, product_code),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Formula not found")
+        conn.commit()
+        cur.close()
+        return {"message": "Formula updated"}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.delete("/{product_code}/{formula_id}")
+def delete_formula(product_code: str, formula_id: str, user: CurrentUser = CurrentUser):
+    if not _valid_uuid(formula_id):
+        raise HTTPException(status_code=404, detail="Formula not found")
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM premium_formula WHERE id=%s::uuid AND product_code=%s",
+            (formula_id, product_code),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Formula not found")
+        conn.commit()
+        cur.close()
+        return {"message": "Formula deleted"}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.post("/{product_code}/{formula_id}/steps", status_code=201)
+def add_step(product_code: str, formula_id: str, body: StepIn, user: CurrentUser = CurrentUser):
+    if not _valid_uuid(formula_id):
+        raise HTTPException(status_code=404, detail="Formula not found")
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM premium_formula WHERE id=%s::uuid AND product_code=%s",
+            (formula_id, product_code),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Formula not found")
+        step_id = str(uuid.uuid4())
+        cur.execute(
+            """
+            INSERT INTO premium_formula_step
+                (id, formula_id, seq_no, description, operator, factor,
+                 parameter_type, user_value, user_label, scale_id)
+            VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (formula_id, seq_no) DO UPDATE SET
+                description    = EXCLUDED.description,
+                operator       = EXCLUDED.operator,
+                factor         = EXCLUDED.factor,
+                parameter_type = EXCLUDED.parameter_type,
+                user_value     = EXCLUDED.user_value,
+                user_label     = EXCLUDED.user_label,
+                scale_id       = EXCLUDED.scale_id
+            """,
+            (step_id, formula_id, body.seq_no, body.description,
+             body.operator, body.factor, body.parameter_type,
+             body.user_value, body.user_label, body.scale_id),
+        )
+        conn.commit()
+        cur.close()
+        return {"step_id": step_id, "message": "Step saved"}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)
+
+
+@router.delete("/{product_code}/{formula_id}/steps/{step_id}")
+def delete_step(product_code: str, formula_id: str, step_id: str, user: CurrentUser = CurrentUser):
+    if not _valid_uuid(formula_id):
+        raise HTTPException(status_code=404, detail="Formula not found")
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins only")
+    conn, release = _get_db()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM premium_formula_step WHERE id=%s::uuid AND formula_id=%s::uuid",
+            (step_id, formula_id),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Step not found")
+        conn.commit()
+        cur.close()
+        return {"message": "Step deleted"}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        release(conn)

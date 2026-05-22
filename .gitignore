@@ -1,0 +1,134 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── Environment / secrets — NEVER commit these ───────────────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+
+# ── Frontend build artefacts ──────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+
+# ── Uploads / temp files ──────────────────────────────────────────────────────
+uploads/
+tmp/
+*.tmp
+*.bak
+*.swp
+
+# ── Database dumps (keep migrations/, ignore ad-hoc dumps) ───────────────────
+backups/
+*.dump
+*.sql.gz
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
+*.iml
+.DS_Store
+Thumbs.db
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-data/
+postgres-data/
+*.tar
+*.tar.gz
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# AI / Models
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# Node package managers
+frontend/.npm/
+frontend/.pnpm-store/
+
+# Misc caches
+.cache/
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-data/
+postgres-data/
+*.tar
+*.tar.gz
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+
+# Node package managers
+frontend/.npm/
+frontend/.pnpm-store/
+
+# Misc caches
+.cache/
+*:Zone.Identifier
+.env.docker
+.env.docker

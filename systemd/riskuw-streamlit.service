@@ -1,0 +1,38 @@
+# systemd/riskuw-streamlit.service
+# Keep the legacy Streamlit UI alive in parallel while React is being rolled out.
+# Install: sudo cp systemd/riskuw-streamlit.service /etc/systemd/system/
+#          sudo systemctl daemon-reload
+#          sudo systemctl enable --now riskuw-streamlit
+
+[Unit]
+Description=RiskUW Legacy Streamlit UI
+After=network.target riskuw-api.service
+Wants=riskuw-api.service
+
+[Service]
+Type=exec
+User=uw_user
+Group=uw_user
+WorkingDirectory=/opt/riskuw
+
+EnvironmentFile=/opt/riskuw/.env
+
+ExecStart=/opt/riskuw/venv/bin/streamlit run streamlit/uw_platform.py \
+    --server.port=8501 \
+    --server.address=127.0.0.1 \
+    --server.headless=true \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false
+
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=riskuw-streamlit
+
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

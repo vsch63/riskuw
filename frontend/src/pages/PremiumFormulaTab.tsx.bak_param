@@ -1,0 +1,848 @@
+// ══════════════════════════════════════════════════════════════════════════════
+// PremiumFormulaTab.tsx
+// Drop into ProductConfigPage as a new tab: 💰 Premium Formula
+//
+// Add to tabs array in ProductConfigPage.tsx:
+//   import PremiumFormulaTab from './PremiumFormulaTab'   (or paste inline)
+//   { key: 'premium-formula', label: '💰 Premium Formula',
+//     children: selected ? <PremiumFormulaTab code={selected}/> : null }
+//
+// Add to nginx proxy: premium-formula
+// Add to main.py:
+//   from routers.premium_formula import router as pf_router
+//   app.include_router(pf_router)
+// ══════════════════════════════════════════════════════════════════════════════
+
+import { useEffect, useState } from 'react'
+import {
+  Table, Button, Modal, Form, Input, Select, InputNumber,
+  Switch, Spin, message, Tag, Popconfirm, Space, Tabs, Divider,
+} from 'antd'
+import {
+  PlusOutlined, DeleteOutlined, EditOutlined,
+  PlayCircleOutlined, SaveOutlined, ArrowUpOutlined, ArrowDownOutlined,
+} from '@ant-design/icons'
+import { api } from '../api/client'
+
+const { Option } = Select
+const { TextArea } = Input
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface FormulaStep {
+  id?: string
+  seq_no: number
+  description?: string
+  operator: string
+  factor: number
+  parameter_type: string
+  user_value?: number | null
+  user_label?: string | null
+  scale_id?: string | null
+  scale_name?: string | null
+}
+
+interface Formula {
+  id?: string
+  formula_name: string
+  description?: string
+  formula_type: string
+  is_active: boolean
+  effective_date: string
+  expiry_date?: string
+  step_count?: number
+  steps?: FormulaStep[]
+}
+
+interface AvailableScale {
+  id: string
+  name: string
+  scale_type: string
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const OPERATORS = [
+  { value: '+', label: '+ Add' },
+  { value: '-', label: '− Subtract' },
+  { value: '*', label: '× Multiply' },
+  { value: '/', label: '÷ Divide' },
+  { value: '%', label: '% Percent of' },
+]
+
+const PARAMETER_TYPES = [
+  { value: 'USER_VALUE',  label: 'User Constant (fixed value)' },
+  { value: 'USER_LABEL',  label: 'User Label (per-proposal value)' },
+  { value: 'SUM_ASSURED',    label: 'Sum Assured' },
+  { value: 'RATE_SCALE',     label: 'Rate Scale Value' },
+  { value: 'DEBIT_POINTS',   label: 'Net Debit Points' },
+  { value: 'POLICY_TERM',    label: 'Policy Term (years)' },
+  { value: 'ANNUAL_INCOME',  label: 'Annual Income' },
+  { value: 'AGE',            label: 'Age' },
+  { value: 'PREVIOUS_RESULT',label: 'Previous Step Result' },
+]
+
+const FORMULA_TYPES = [
+  { value: 'BASE_PREMIUM',       label: 'Base Premium', color: 'cyan' },
+  { value: 'SUBSTANDARD_LOADING',label: 'Substandard Loading', color: 'gold' },
+  { value: 'FLAT_EXTRA',         label: 'Flat Extra', color: 'orange' },
+  { value: 'GST',                label: 'GST Calculation', color: 'purple' },
+]
+
+const card: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.02)',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 10, padding: '20px 24px', marginBottom: 16,
+}
+const secTitle: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: '#6b7280',
+  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16,
+}
+const MS = {
+  content: { background: '#0d1521', border: '1px solid rgba(255,255,255,0.09)' },
+  header:  { background: '#0d1521' },
+  footer:  { background: '#0d1521' },
+}
+
+// ── Step Row Editor ───────────────────────────────────────────────────────────
+function StepRow({
+  step, index, scales, userLabels, onChange, onRemove, onMoveUp, onMoveDown, isFirst, isLast,
+}: {
+  step: FormulaStep; index: number; scales: AvailableScale[]
+  userLabels: {label_key:string,label_name:string,data_type:string,default_value?:string,prefix?:string,suffix?:string}[]
+  onChange: (i: number, s: FormulaStep) => void
+  onRemove: (i: number) => void
+  onMoveUp: (i: number) => void
+  onMoveDown: (i: number) => void
+  isFirst: boolean; isLast: boolean
+}) {
+  return (
+    <div style={{
+      display: 'grid', gridTemplateColumns: '60px 80px 80px 160px 1fr auto',
+      gap: 8, alignItems: 'center', padding: '10px 0',
+      borderBottom: '1px solid rgba(255,255,255,0.05)',
+    }}>
+      {/* Seq No */}
+      <div style={{ textAlign: 'center' }}>
+        <Tag style={{
+          fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
+          background: 'rgba(0,212,170,0.1)', borderColor: 'rgba(0,212,170,0.3)',
+          color: '#00d4aa',
+        }}>
+          {step.seq_no}
+        </Tag>
+      </div>
+
+      {/* Operator */}
+      <Select
+        value={step.operator}
+        onChange={v => onChange(index, { ...step, operator: v })}
+        size="small"
+      >
+        {OPERATORS.map(o => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+      </Select>
+
+      {/* Factor */}
+      <InputNumber
+        value={step.factor}
+        onChange={v => onChange(index, { ...step, factor: v ?? 1 })}
+        size="small" step={0.001}
+        style={{ width: '100%' }}
+      />
+
+      {/* Parameter Type */}
+      <Select
+        value={step.parameter_type}
+        onChange={v => onChange(index, { ...step, parameter_type: v, user_value: null, scale_id: null })}
+        size="small"
+        style={{ width: '100%' }}
+      >
+        {PARAMETER_TYPES.map(p => <Option key={p.value} value={p.value}>{p.label}</Option>)}
+      </Select>
+
+      {/* Value/Scale/Label */}
+      <div>
+        {step.parameter_type === 'USER_VALUE' && (
+          <InputNumber
+            value={step.user_value ?? undefined}
+            onChange={v => onChange(index, { ...step, user_value: v ?? null })}
+            size="small" placeholder="e.g. 1000 (added/multiplied at this step)"
+            style={{ width: '100%' }}
+          />
+        )}
+        {step.parameter_type === 'USER_LABEL' && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <Select
+              value={step.user_label ?? undefined}
+              onChange={v => {
+                const lbl = userLabels.find(l => l.label_key === v)
+                onChange(index, {
+                  ...step,
+                  user_label:  v,
+                  user_value:  lbl?.default_value ? parseFloat(lbl.default_value) : step.user_value,
+                })
+              }}
+              size="small"
+              placeholder="Select user label (e.g. rider_sa)…"
+              style={{ flex: 2 }}
+              showSearch
+              optionFilterProp="label"
+              notFoundContent={userLabels.length === 0
+                ? <span style={{ fontSize: 11, color: '#6b7280' }}>No labels defined in System Config → User Labels</span>
+                : "No match"}
+              options={userLabels.map(l => ({
+                value: l.label_key,
+                label: `${l.label_name} (${l.label_key})`,
+              }))}
+            />
+            <InputNumber
+              value={step.user_value ?? undefined}
+              onChange={v => onChange(index, { ...step, user_value: v ?? null })}
+              size="small"
+              placeholder="Default"
+              style={{ flex: 1 }}
+            />
+          </div>
+        )}
+        {step.parameter_type === 'RATE_SCALE' && (
+          <Select
+            value={step.scale_id ?? undefined}
+            onChange={v => onChange(index, { ...step, scale_id: v })}
+            size="small" placeholder="Select mortality/debit scale…"
+            style={{ width: '100%' }}
+            showSearch
+            optionFilterProp="label"
+            notFoundContent={scales.length === 0 ? "No scales available" : "No match"}
+            options={scales.map(s => ({
+              value: s.id,
+              label: `[${s.scale_type}] ${s.name}`,
+            }))}
+          />
+        )}
+        {!['USER_VALUE', 'USER_LABEL', 'RATE_SCALE'].includes(step.parameter_type) && (
+          <Input
+            value={step.description || ''}
+            onChange={e => onChange(index, { ...step, description: e.target.value })}
+            size="small" placeholder="Step description — e.g. Base premium rate lookup by age/term"
+            style={{ width: '100%' }}
+          />
+        )}
+      </div>
+
+      {/* Actions */}
+      <Space size={2}>
+        <Button size="small" icon={<ArrowUpOutlined/>}   disabled={isFirst}  onClick={() => onMoveUp(index)}   type="text" style={{ color: '#6b7280' }}/>
+        <Button size="small" icon={<ArrowDownOutlined/>} disabled={isLast}   onClick={() => onMoveDown(index)} type="text" style={{ color: '#6b7280' }}/>
+        <Popconfirm title="Remove step?" onConfirm={() => onRemove(index)} okText="Remove">
+          <Button size="small" icon={<DeleteOutlined/>} danger type="text"/>
+        </Popconfirm>
+      </Space>
+    </div>
+  )
+}
+
+// ── Formula Editor Modal ──────────────────────────────────────────────────────
+function FormulaModal({
+  open, initial, productCode, onSave, onClose,
+}: {
+  open: boolean; initial: Formula | null; productCode: string
+  onSave: () => void; onClose: () => void
+}) {
+  const [formula, setFormula] = useState<Formula>(
+    initial || { formula_name: '', formula_type: 'BASE_PREMIUM', is_active: true, effective_date: new Date().toISOString().split('T')[0], steps: [] }
+  )
+  const [saving, setSaving]   = useState(false)
+  const [scales, setScales]   = useState<AvailableScale[]>([])
+  const [userLabels, setUserLabels] = useState<{label_key:string,label_name:string,data_type:string,default_value?:string,prefix?:string,suffix?:string,description?:string}[]>([])
+
+  useEffect(() => {
+    setFormula(initial || { formula_name: '', formula_type: 'BASE_PREMIUM', is_active: true, effective_date: new Date().toISOString().split('T')[0], steps: [] })
+  }, [initial, open])
+
+  // Load scales and system user labels every time modal opens
+  useEffect(() => {
+    if (!open) return
+    Promise.all([
+      api.get('/uw-scales/'),
+      api.get('/system/user-labels/keys'),
+    ]).then(([sRes, lRes]) => {
+      setScales(Array.isArray(sRes.data) ? sRes.data : [])
+      setUserLabels(Array.isArray(lRes.data) ? lRes.data : [])
+    }).catch(() => {})
+  }, [open])
+
+  const steps = formula.steps || []
+
+  const addStep = () => {
+    const maxSeq = steps.length > 0 ? Math.max(...steps.map(s => s.seq_no)) : 0
+    setFormula(f => ({
+      ...f,
+      steps: [...(f.steps || []), {
+        seq_no:         maxSeq + 10,
+        operator:       steps.length === 0 ? '+' : '*',
+        factor:         1,
+        parameter_type: steps.length === 0 ? 'RATE_SCALE' : 'SUM_ASSURED',
+        user_value:     null,
+        user_label:     null,
+        scale_id:       null,
+      }],
+    }))
+  }
+
+  const updateStep = (i: number, s: FormulaStep) => {
+    const arr = [...steps]; arr[i] = s
+    setFormula(f => ({ ...f, steps: arr }))
+  }
+
+  const removeStep = (i: number) => {
+    setFormula(f => ({ ...f, steps: (f.steps || []).filter((_, idx) => idx !== i) }))
+  }
+
+  const moveUp = (i: number) => {
+    if (i === 0) return
+    const arr = [...steps]
+    const tmp = arr[i - 1].seq_no; arr[i - 1].seq_no = arr[i].seq_no; arr[i].seq_no = tmp;
+    [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]]
+    setFormula(f => ({ ...f, steps: arr }))
+  }
+
+  const moveDown = (i: number) => {
+    if (i === steps.length - 1) return
+    const arr = [...steps]
+    const tmp = arr[i + 1].seq_no; arr[i + 1].seq_no = arr[i].seq_no; arr[i].seq_no = tmp;
+    [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]]
+    setFormula(f => ({ ...f, steps: arr }))
+  }
+
+  const handleSave = async () => {
+    if (!formula.formula_name.trim()) { message.error('Formula name required'); return }
+    if (!steps.length) { message.error('Add at least one step'); return }
+    setSaving(true)
+    try {
+      let fid = formula.id
+      if (fid) {
+        await api.put(`/premium-formula/${productCode}/${fid}`, {
+          formula_name: formula.formula_name, description: formula.description,
+          formula_type: formula.formula_type, is_active: formula.is_active,
+          effective_date: formula.effective_date, expiry_date: formula.expiry_date || null,
+        })
+      } else {
+        const r = await api.post(`/premium-formula/${productCode}`, {
+          formula_name: formula.formula_name, description: formula.description,
+          formula_type: formula.formula_type, is_active: formula.is_active,
+          effective_date: formula.effective_date, expiry_date: formula.expiry_date || null,
+        })
+        fid = r.data.formula_id
+      }
+      // Save steps
+      for (const step of steps) {
+        await api.post(`/premium-formula/${productCode}/${fid}/steps`, {
+          seq_no:         step.seq_no,
+          description:    step.description || null,
+          operator:       step.operator,
+          factor:         step.factor,
+          parameter_type: step.parameter_type,
+          user_value:     step.user_value ?? null,
+          user_label:     step.user_label ?? null,
+          scale_id:       step.scale_id ?? null,
+        })
+      }
+      message.success('Formula saved')
+      onSave()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={<span style={{ color: '#e2e8f0' }}>{formula.id ? 'Edit Formula' : 'Create Premium Formula'}</span>}
+      open={open} onCancel={onClose} width={900} styles={MS}
+      footer={[
+        <Button key="c" onClick={onClose}>Cancel</Button>,
+        <Button key="s" type="primary" icon={<SaveOutlined/>} loading={saving} onClick={handleSave}>
+          {formula.id ? 'Save Changes' : 'Create Formula'}
+        </Button>,
+      ]}
+    >
+      {/* Header */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16, marginBottom: 20 }}>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase' }}>Formula Name *</div>
+          <Input value={formula.formula_name} onChange={e => setFormula(f => ({ ...f, formula_name: e.target.value }))}
+            placeholder="e.g. Term Plan Base Premium" />
+        </div>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase' }}>Description</div>
+          <TextArea value={formula.description || ''} onChange={e => setFormula(f => ({ ...f, description: e.target.value }))}
+            rows={2} placeholder="Brief description of this formula…" />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase' }}>Formula Type *</div>
+          <Select value={formula.formula_type} onChange={v => setFormula(f => ({ ...f, formula_type: v }))} style={{ width: '100%' }} placeholder="Select formula type…">
+            {FORMULA_TYPES.map(t => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+          </Select>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase' }}>Effective Date</div>
+          <Input type="date" value={formula.effective_date}
+            onChange={e => setFormula(f => ({ ...f, effective_date: e.target.value }))} />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase' }}>Expiry Date <span style={{ color:'#4b5563' }}>(blank = open)</span></div>
+          <Input type="date" value={formula.expiry_date || ''}
+            onChange={e => setFormula(f => ({ ...f, expiry_date: e.target.value || undefined }))} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <Switch checked={formula.is_active} onChange={v => setFormula(f => ({ ...f, is_active: v }))}
+            checkedChildren="Active" unCheckedChildren="Inactive" />
+        </div>
+      </div>
+
+      {/* Steps */}
+      <Divider style={{ borderColor: 'rgba(255,255,255,0.07)' }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>Calculation Steps</div>
+        <Button icon={<PlusOutlined/>} type="primary" size="small" onClick={addStep}>Add Step</Button>
+      </div>
+
+      {/* Column headers */}
+      <div style={{ display: 'grid', gridTemplateColumns: '60px 80px 80px 160px 1fr auto', gap: 8, marginBottom: 4 }}>
+        {['Seq', 'Operator', 'Factor', 'Parameter', 'Value / Scale / Description', ''].map(h => (
+          <div key={h} style={{ fontSize: 10, color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</div>
+        ))}
+      </div>
+
+      {steps.length === 0 ? (
+        <div style={{ fontSize: 12, color: '#4b5563', fontStyle: 'italic', padding: '16px 0' }}>
+          No steps yet — click Add Step to build your formula
+        </div>
+      ) : steps.map((s, i) => (
+        <StepRow
+          key={i} step={s} index={i} scales={scales} userLabels={userLabels}
+          onChange={updateStep} onRemove={removeStep}
+          onMoveUp={moveUp} onMoveDown={moveDown}
+          isFirst={i === 0} isLast={i === steps.length - 1}
+        />
+      ))}
+
+      {/* Formula preview */}
+      {steps.length > 0 && (
+        <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(0,212,170,0.05)',
+          border: '1px solid rgba(0,212,170,0.15)', borderRadius: 6 }}>
+          <div style={{ fontSize: 10, color: '#00d4aa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+            Formula Preview
+          </div>
+          <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12, color: '#e2e8f0' }}>
+            result = 0{'\n'}
+            {steps.map((s, i) => (
+              <div key={i} style={{ marginTop: 2 }}>
+                <span style={{ color: '#fbbf24' }}>step {s.seq_no}</span>
+                {': result = result '}
+                <span style={{ color: '#60a5fa' }}>{s.operator}</span>
+                {' ('}
+                <span style={{ color: '#a78bfa' }}>{s.factor}</span>
+                {' × '}
+                <span style={{ color: '#00d4aa' }}>
+                  {s.parameter_type === 'USER_VALUE' ? (s.user_value ?? '?') :
+                   s.parameter_type === 'USER_LABEL' ? `input["${s.user_label || '?'}"] (default: ${s.user_value ?? '?'})` :
+                   s.parameter_type === 'RATE_SCALE'  ? `scale[${s.scale_id?.slice(0,8) ?? '?'}]` :
+                   s.parameter_type}
+                </span>
+                {')'}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+// ── Test Calculator Modal ─────────────────────────────────────────────────────
+function TestCalcModal({ open, productCode, onClose }: { open: boolean; productCode: string; onClose: () => void }) {
+  const [form] = Form.useForm()
+  const [result, setResult] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+
+  const run = async () => {
+    const v = form.getFieldsValue()
+    setLoading(true)
+    try {
+      const r = await api.post(`/premium-formula/${productCode}/calculate`, v)
+      setResult(r.data)
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || 'Calculation failed')
+    } finally {
+      setLoading(false) }
+  }
+
+  const fmt = (n: number) => `₹${n?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+
+  return (
+    <Modal title={<span style={{ color: '#e2e8f0' }}>Test Premium Calculator</span>}
+      open={open} onCancel={onClose} width={720} styles={MS}
+      footer={[
+        <Button key="c" onClick={onClose}>Close</Button>,
+        <Button key="r" type="primary" icon={<PlayCircleOutlined/>} loading={loading} onClick={run}>
+          Calculate Premium
+        </Button>,
+      ]}
+    >
+      <Form form={form} layout="vertical" initialValues={{
+        age: 35, gender: 'M', face_amount: 5000000, tobacco_status: 'NEVER',
+        coverage_term_yrs: 20, mode: 'ANNUAL', net_debit_points: 0, risk_class: 'STANDARD',
+        formula_type: 'BASE_PREMIUM',
+      }} style={{ marginTop: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <Form.Item name="age" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>AGE</span>}>
+            <InputNumber style={{ width: '100%' }} min={1} max={99} />
+          </Form.Item>
+          <Form.Item name="gender" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>GENDER</span>}>
+            <Select>
+              <Option value="M">Male</Option>
+              <Option value="F">Female</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="tobacco_status" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>TOBACCO</span>}>
+            <Select>
+              <Option value="NEVER">Non-Smoker</Option>
+              <Option value="SMOKER">Smoker</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="face_amount" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>FACE AMOUNT (₹)</span>}>
+            <InputNumber style={{ width: '100%' }} step={100000} formatter={v => `₹${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} />
+          </Form.Item>
+          <Form.Item name="coverage_term_yrs" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>TERM (YEARS)</span>}>
+            <InputNumber style={{ width: '100%' }} min={1} max={99} />
+          </Form.Item>
+          <Form.Item name="mode" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>PAYMENT MODE</span>}>
+            <Select>
+              <Option value="ANNUAL">Annual</Option>
+              <Option value="HALF_YEARLY">Half-Yearly</Option>
+              <Option value="QUARTERLY">Quarterly</Option>
+              <Option value="MONTHLY">Monthly</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="net_debit_points" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>DEBIT POINTS</span>}>
+            <InputNumber style={{ width: '100%' }} min={0} />
+          </Form.Item>
+          <Form.Item name="risk_class" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>RISK CLASS</span>}>
+            <Select>
+              <Option value="PREFERRED">Preferred</Option>
+              <Option value="STANDARD">Standard</Option>
+              <Option value="SUBSTANDARD">Substandard</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="formula_type" label={<span style={{ color: '#9ca3af', fontSize: 11 }}>FORMULA TYPE</span>}>
+            <Select>
+              {FORMULA_TYPES.map(t => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+            </Select>
+          </Form.Item>
+        </div>
+      </Form>
+
+      {result && (
+        <div style={{ marginTop: 16 }}>
+          {result.error ? (
+            <div style={{ color: '#ef4444', padding: '10px 14px', background: 'rgba(239,68,68,0.1)', borderRadius: 6 }}>
+              ❌ {result.error}
+            </div>
+          ) : (
+            <>
+              {/* Summary */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
+                {[
+                  { label: 'Annual Premium',     value: fmt(result.annual_premium),    color: '#00d4aa' },
+                  { label: 'Modal Premium',       value: fmt(result.modal_premium),     color: '#60a5fa' },
+                  { label: 'Total First Year',    value: fmt(result.total_first_year),  color: '#fbbf24' },
+                  { label: 'Total Renewal',       value: fmt(result.total_renewal),     color: '#a78bfa' },
+                ].map(m => (
+                  <div key={m.label} style={{ padding: '12px 14px', background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', marginBottom: 4 }}>{m.label}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: m.color, fontFamily: 'var(--font-mono, monospace)' }}>{m.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* All modes */}
+              {result.all_modes && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={secTitle}>All Payment Modes</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+                    {Object.entries(result.all_modes).map(([mode, m]: [string, any]) => (
+                      <div key={mode} style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.02)',
+                        border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6 }}>
+                        <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', marginBottom: 6 }}>{mode.replace('_',' ')}</div>
+                        <div style={{ fontSize: 12, color: '#e2e8f0', fontFamily: 'var(--font-mono,monospace)' }}>{fmt(m.modal_premium)}</div>
+                        <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>FY: {fmt(m.total_first_year)}</div>
+                        <div style={{ fontSize: 10, color: '#6b7280' }}>Renewal: {fmt(m.total_renewal)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Steps breakdown */}
+              {result.steps_executed?.length > 0 && (
+                <div>
+                  <div style={secTitle}>Calculation Steps</div>
+                  {result.steps_executed.map((s: any, i: number) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Tag style={{ fontFamily: 'var(--font-mono,monospace)', fontSize: 10,
+                          background: 'rgba(0,212,170,0.1)', borderColor: 'rgba(0,212,170,0.2)', color: '#00d4aa' }}>
+                          {s.seq_no}
+                        </Tag>
+                        <span style={{ color: '#9ca3af' }}>{s.description}</span>
+                        <span style={{ color: '#60a5fa' }}>{s.operator}</span>
+                        <span style={{ color: '#a78bfa' }}>{s.factor} × {s.operand?.toLocaleString('en-IN', { maximumFractionDigits: 4 })}</span>
+                      </div>
+                      <span style={{ color: '#00d4aa', fontFamily: 'var(--font-mono,monospace)', fontWeight: 600 }}>
+                        = {s.result?.toLocaleString('en-IN', { maximumFractionDigits: 4 })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN TAB COMPONENT
+// ══════════════════════════════════════════════════════════════════════════════
+export default function PremiumFormulaTab({ code }: { code: string }) {
+  const [formulas, setFormulas]     = useState<Formula[]>([])
+  const [scales, setScales]         = useState<AvailableScale[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [modalOpen, setModalOpen]   = useState(false)
+  const [editing, setEditing]       = useState<Formula | null>(null)
+  const [testOpen, setTestOpen]     = useState(false)
+  const [modalFactors, setModalFactors] = useState<any[]>([])
+  const [gst, setGst]               = useState<any>(null)
+  const [activeTab, setActiveTab]   = useState('formulas')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [fRes, sRes, mRes, gRes] = await Promise.all([
+        api.get(`/premium-formula/${code}`),
+        api.get('/uw-scales/'),   // fetch all scales in one call
+        api.get(`/premium-formula/${code}/modal-factors`),
+        api.get(`/premium-formula/${code}/gst`),
+      ])
+      setFormulas(Array.isArray(fRes.data) ? fRes.data : [])
+      setScales(Array.isArray(sRes.data) ? sRes.data : [])
+      setModalFactors(Array.isArray(mRes.data) ? mRes.data : [])
+      setGst(gRes.data || null)
+    } catch { message.error('Failed to load premium formulas') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { if (code) load() }, [code])
+
+  const openEdit = async (id: string) => {
+    try {
+      const r = await api.get(`/premium-formula/${code}/${id}`)
+      setEditing(r.data)
+      setModalOpen(true)
+    } catch { message.error('Failed to load formula') }
+  }
+
+  const handleDelete = async (id: string, name: string) => {
+    try {
+      await api.delete(`/premium-formula/${code}/${id}`)
+      message.success(`Deleted: ${name}`)
+      load()
+    } catch (e: any) { message.error(e?.response?.data?.detail || 'Delete failed') }
+  }
+
+  const saveModalFactors = async () => {
+    const obj: any = {}
+    modalFactors.forEach((m: any) => { obj[m.mode.toLowerCase()] = m.factor })
+    try {
+      await api.put(`/premium-formula/${code}/modal-factors`, { 
+        annual: obj.annual ?? 1.0, half_yearly: obj.half_yearly ?? 0.51,
+        quarterly: obj.quarterly ?? 0.26, monthly: obj.monthly ?? 0.09,
+      })
+      message.success('Modal factors saved')
+    } catch { message.error('Failed to save modal factors') }
+  }
+
+  const saveGST = async () => {
+    try {
+      await api.put(`/premium-formula/${code}/gst`, gst)
+      message.success('GST config saved')
+    } catch { message.error('Failed to save GST config') }
+  }
+
+  const formulaCols = [
+    {
+      title: 'Formula Name', dataIndex: 'formula_name',
+      render: (v: string, r: Formula) => (
+        <div>
+          <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13 }}>{v}</div>
+          {r.description && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{r.description}</div>}
+        </div>
+      ),
+    },
+    {
+      title: 'Type', dataIndex: 'formula_type', width: 160,
+      render: (v: string) => {
+        const t = FORMULA_TYPES.find(x => x.value === v)
+        return <Tag color={t?.color || 'default'} style={{ fontSize: 11, fontWeight: 600 }}>{t?.label || v}</Tag>
+      },
+    },
+    { title: 'Steps', dataIndex: 'step_count', width: 70,
+      render: (v: number) => <span style={{ color: '#00d4aa', fontFamily: 'var(--font-mono,monospace)', fontWeight: 600 }}>{v ?? 0}</span> },
+    { title: 'Effective', dataIndex: 'effective_date', width: 110,
+      render: (v: string) => <span style={{ fontSize: 11, color: '#9ca3af' }}>{v}</span> },
+    { title: 'Status', dataIndex: 'is_active', width: 90,
+      render: (v: boolean) => <Tag color={v ? 'success' : 'default'}>{v ? 'Active' : 'Inactive'}</Tag> },
+    {
+      title: '', width: 120,
+      render: (_: any, r: Formula) => (
+        <Space size={4}>
+          <Button size="small" icon={<EditOutlined/>} onClick={() => openEdit(r.id!)}
+            style={{ borderColor: 'rgba(0,212,170,0.25)', color: '#00d4aa' }}>Edit</Button>
+          <Popconfirm title={`Delete "${r.formula_name}"?`}
+            onConfirm={() => handleDelete(r.id!, r.formula_name)} okText="Delete">
+            <Button size="small" danger icon={<DeleteOutlined/>}/>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  return (
+    <div>
+      <Tabs activeKey={activeTab} onChange={setActiveTab} size="small"
+        tabBarStyle={{ borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 20 }}
+        items={[
+          {
+            key: 'formulas',
+            label: '📐 Formulas',
+            children: (
+              <div>
+                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+                  Build sequential calculation formulas for this product. Steps execute in order —
+                  each step takes the result of the previous and applies an operator.
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+                  <Button icon={<PlayCircleOutlined/>} onClick={() => setTestOpen(true)}
+                    style={{ borderColor: 'rgba(0,212,170,0.3)', color: '#00d4aa' }}>
+                    Test Calculator
+                  </Button>
+                  <Button type="primary" icon={<PlusOutlined/>}
+                    onClick={() => { setEditing(null); setModalOpen(true) }}>
+                    New Formula
+                  </Button>
+                </div>
+
+                {loading
+                  ? <div style={{ textAlign: 'center', padding: 40 }}><Spin size="large"/></div>
+                  : formulas.length === 0
+                    ? <div style={{ ...card, borderColor: 'rgba(0,212,170,0.2)', background: 'rgba(0,212,170,0.04)' }}>
+                        <div style={{ fontSize: 13, color: '#9ca3af' }}>
+                          ℹ No premium formulas configured for <strong style={{ color: '#00d4aa' }}>{code}</strong>.
+                          Create a formula to enable automatic premium calculation after UW decisions.
+                        </div>
+                        <div style={{ marginTop: 12 }}>
+                          <Button type="primary" icon={<PlusOutlined/>}
+                            onClick={() => { setEditing(null); setModalOpen(true) }}>
+                            Create First Formula
+                          </Button>
+                        </div>
+                      </div>
+                    : <Table dataSource={formulas} columns={formulaCols} rowKey="id"
+                        size="small" pagination={false}/>
+                }
+              </div>
+            ),
+          },
+          {
+            key: 'modal',
+            label: '📅 Modal Factors',
+            children: (
+              <div style={card}>
+                <div style={secTitle}>Payment Mode Factors</div>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
+                  Annual premium × modal factor = premium for that frequency.
+                  Indian standard: Annual 1.00, Half-Yearly 0.51, Quarterly 0.26, Monthly 0.09
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+                  {['ANNUAL','HALF_YEARLY','QUARTERLY','MONTHLY'].map(mode => {
+                    const mf = modalFactors.find((m: any) => m.mode === mode)
+                    return (
+                      <div key={mode}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{mode.replace('_',' ')}</div>
+                        <InputNumber
+                          value={mf?.factor ?? (mode === 'ANNUAL' ? 1 : mode === 'HALF_YEARLY' ? 0.51 : mode === 'QUARTERLY' ? 0.26 : 0.09)}
+                          onChange={v => setModalFactors(prev => {
+                            const arr = [...prev]
+                            const idx = arr.findIndex((m: any) => m.mode === mode)
+                            if (idx >= 0) arr[idx] = { ...arr[idx], factor: v }
+                            else arr.push({ mode, factor: v })
+                            return arr
+                          })}
+                          step={0.001} min={0} max={2} style={{ width: '100%' }}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+                <Button type="primary" icon={<SaveOutlined/>} onClick={saveModalFactors}>Save Modal Factors</Button>
+              </div>
+            ),
+          },
+          {
+            key: 'gst',
+            label: '🏛️ GST Config',
+            children: (
+              <div style={card}>
+                <div style={secTitle}>GST Configuration (IRDAI Norms)</div>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
+                  As per IRDAI: First year premium attracts 18% GST, renewal premium attracts 5% GST.
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 400, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>FIRST YEAR GST (%)</div>
+                    <InputNumber
+                      value={gst?.first_year_rate ?? 18}
+                      onChange={v => setGst((g: any) => ({ ...g, first_year_rate: v }))}
+                      min={0} max={100} step={0.5} style={{ width: '100%' }}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>RENEWAL GST (%)</div>
+                    <InputNumber
+                      value={gst?.renewal_rate ?? 5}
+                      onChange={v => setGst((g: any) => ({ ...g, renewal_rate: v }))}
+                      min={0} max={100} step={0.5} style={{ width: '100%' }}
+                    />
+                  </div>
+                </div>
+                <Button type="primary" icon={<SaveOutlined/>} onClick={saveGST}>Save GST Config</Button>
+              </div>
+            ),
+          },
+        ]}
+      />
+
+      <FormulaModal
+        open={modalOpen} initial={editing} productCode={code}
+        onSave={() => { setModalOpen(false); setEditing(null); load() }}
+        onClose={() => { setModalOpen(false); setEditing(null) }}
+      />
+
+      <TestCalcModal open={testOpen} productCode={code} onClose={() => setTestOpen(false)} />
+    </div>
+  )
+}

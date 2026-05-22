@@ -1,0 +1,140 @@
+/* ─── Design tokens ──────────────────────────────── */
+:root {
+  --navy-950: #060d1f;
+  --navy-900: #0a1628;
+  --navy-800: #0f2044;
+  --navy-700: #162b5e;
+  --navy-600: #1e3a78;
+  --teal-500: #00d4aa;
+  --teal-400: #33ddb8;
+  --teal-300: #66e8cc;
+  --teal-600: #00b894;
+  --amber-400: #fbbf24;
+  --amber-500: #f59e0b;
+  --red-400:   #f87171;
+  --red-500:   #ef4444;
+  --green-400: #4ade80;
+  --green-500: #22c55e;
+  --purple-400: #c084fc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --white: #ffffff;
+
+  --font-display: 'Sora', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --sidebar-w: 240px;
+  --header-h: 56px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --shadow-card: 0 2px 16px rgba(0,0,0,0.18), 0 0 0 1px rgba(255,255,255,0.04);
+  --shadow-glow-teal: 0 0 24px rgba(0,212,170,0.25);
+  --transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  font-family: var(--font-body);
+  background: var(--navy-950);
+  color: var(--white);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Antd overrides */
+.ant-btn-primary {
+  background: var(--teal-500) !important;
+  border-color: var(--teal-500) !important;
+  color: var(--navy-950) !important;
+  font-family: var(--font-body) !important;
+  font-weight: 600 !important;
+}
+.ant-btn-primary:hover {
+  background: var(--teal-400) !important;
+  border-color: var(--teal-400) !important;
+}
+.ant-form-item-label > label {
+  color: var(--slate-300) !important;
+  font-family: var(--font-body) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+}
+.ant-input, .ant-input-number, .ant-select-selector, .ant-picker {
+  background: rgba(255,255,255,0.05) !important;
+  border-color: rgba(255,255,255,0.12) !important;
+  color: var(--white) !important;
+  font-family: var(--font-body) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.ant-input:focus, .ant-input-number:focus,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  border-color: var(--teal-500) !important;
+  box-shadow: 0 0 0 2px rgba(0,212,170,0.15) !important;
+}
+.ant-input::placeholder { color: var(--slate-500) !important; }
+.ant-select-selection-placeholder { color: var(--slate-500) !important; }
+.ant-input-number-input { color: var(--white) !important; }
+.ant-select-item-option-content,
+.ant-select-selection-item { color: var(--white) !important; }
+.ant-select-dropdown {
+  background: var(--navy-800) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+}
+.ant-select-item-option-active { background: rgba(0,212,170,0.1) !important; }
+.ant-select-item-option-selected { background: rgba(0,212,170,0.18) !important; }
+.ant-checkbox-inner {
+  background: rgba(255,255,255,0.05) !important;
+  border-color: rgba(255,255,255,0.25) !important;
+}
+.ant-checkbox-checked .ant-checkbox-inner {
+  background: var(--teal-500) !important;
+  border-color: var(--teal-500) !important;
+}
+.ant-input-number-handler-wrap { background: transparent !important; }
+.ant-input-number-handler { border-color: rgba(255,255,255,0.1) !important; }
+.ant-input-number-handler:hover { background: rgba(255,255,255,0.05) !important; }
+.ant-input-number-handler-up-inner,
+.ant-input-number-handler-down-inner { color: var(--slate-400) !important; }
+.ant-collapse { background: transparent !important; border: none !important; }
+.ant-collapse-header { color: var(--slate-200) !important; }
+.ant-collapse-content { background: rgba(255,255,255,0.02) !important; border-top-color: rgba(255,255,255,0.08) !important; }
+.ant-tag { border-radius: 4px !important; font-family: var(--font-mono) !important; font-size: 11px !important; }
+.ant-steps-item-title { color: var(--slate-300) !important; font-size: 12px !important; }
+.ant-steps-item-finish .ant-steps-item-title { color: var(--teal-400) !important; }
+.ant-steps-item-process .ant-steps-item-title { color: var(--white) !important; }
+.ant-tooltip-inner { font-family: var(--font-body) !important; font-size: 12px !important; background: var(--navy-700) !important; }
+.ant-divider { border-color: rgba(255,255,255,0.08) !important; }
+.ant-divider-inner-text { color: var(--slate-400) !important; font-size: 11px !important; text-transform: uppercase !important; letter-spacing: 0.08em !important; }
+.ant-picker-input > input { color: var(--white) !important; }
+.ant-picker-suffix { color: var(--slate-400) !important; }
+.ant-picker-panel-container {
+  background: var(--navy-800) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+}
+.ant-picker-header-view button { color: var(--white) !important; }
+.ant-picker-cell { color: var(--slate-400) !important; }
+.ant-picker-cell-in-view { color: var(--white) !important; }
+.ant-picker-cell-selected .ant-picker-cell-inner { background: var(--teal-500) !important; }
+.ant-message-notice-content {
+  background: var(--navy-800) !important;
+  color: var(--white) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }

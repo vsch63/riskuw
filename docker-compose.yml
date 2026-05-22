@@ -1,0 +1,154 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RiskUW Platform — docker-compose.yml
+#
+# Co-exists with DNB Docker stack — completely separate network + ports.
+#
+# DNB owns: 80, 443, 3000, 3001, 5432, 6379, 8000, 9000-9001, 9090, 11434
+# RiskUW:   3002, 5433, 6380, 8001  ← no conflicts
+#
+# On Hetzner: host nginx (with Certbot) proxies riskuw.online → :3002
+# On laptop:  access at http://localhost:3002
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL (port 5433 — 5432 is DNB) ────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: riskuw_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${DB_USER:-uw_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB:       ${DB_NAME:-uw_platform}
+    ports:
+      - "5433:5432"
+    volumes:
+      - riskuw_postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-uw_user} -d ${DB_NAME:-uw_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - riskuw-network
+
+  # ── Redis (port 6380 — 6379 is DNB) ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: riskuw_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - riskuw_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - riskuw-network
+
+  # ── FastAPI backend (port 8001 — 8000 is DNB) ────────────────────────────────
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: vsch63/riskuw-backend:latest
+    container_name: riskuw_fastapi
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-uw_user}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-uw_platform}
+      REDIS_URL:    redis://redis:6379/0
+      ENVIRONMENT:  ${ENVIRONMENT:-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - riskuw_fastapi_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - riskuw-network
+
+  # ── Worker (same image as fastapi — different command) ───────────────────────
+  worker:
+    image: vsch63/riskuw-backend:latest
+    container_name: riskuw_worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-uw_user}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-uw_platform}
+      REDIS_URL:    redis://redis:6379/0
+    command: ["python3", "-m", "app.services.job_queue"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      fastapi:
+        condition: service_healthy
+    volumes:
+      - riskuw_worker_logs:/app/logs
+    networks:
+      - riskuw-network
+
+  # ── Frontend (port 3002 — 3000=DNB frontend, 3001=DNB grafana) ───────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE: ""
+    image: vsch63/riskuw-frontend:latest
+    container_name: riskuw_frontend
+    restart: unless-stopped
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    ports:
+      - "3002:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/index.html"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - riskuw-network
+
+# ── Volumes — all prefixed riskuw_ to avoid DNB volume name conflicts ──────────
+volumes:
+  riskuw_postgres_data:
+    name: riskuw_postgres_data
+  riskuw_redis_data:
+    name: riskuw_redis_data
+  riskuw_fastapi_logs:
+    name: riskuw_fastapi_logs
+  riskuw_worker_logs:
+    name: riskuw_worker_logs
+
+# ── Separate network — zero overlap with DNB ───────────────────────────────────
+networks:
+  riskuw-network:
+    name: riskuw-network
+    driver: bridge
+
