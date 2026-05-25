@@ -27,7 +27,14 @@ def _get_db():
 
 
 def _row(r) -> dict:
-    return dict(r) if hasattr(r, "keys") else {}
+    if not hasattr(r, "keys"):
+        return {}
+    d = dict(r)
+    # Serialize datetime/date fields to string for JSON
+    for k, v in d.items():
+        if hasattr(v, 'isoformat'):
+            d[k] = v.isoformat()
+    return d
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -255,7 +262,11 @@ def tenant_audit(tid: str, current: CurrentUser):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM tenant_audit WHERE tenant_id=%s::uuid ORDER BY occurred_at DESC LIMIT 100",
+            """SELECT id::text, tenant_id::text, action, actor,
+                      before_val, after_val, ip_address, occurred_at
+               FROM tenant_audit
+               WHERE tenant_id=%s::uuid
+               ORDER BY occurred_at DESC LIMIT 100""",
             (tid,),
         )
         rows = cur.fetchall()

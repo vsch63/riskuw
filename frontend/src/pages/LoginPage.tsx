@@ -140,6 +140,8 @@ export default function LoginPage() {
         username: data.username ?? values.username,
         role: data.role ?? 'underwriter',
         token: data.access_token,
+        tenant_id: data.tenant_id ?? '',
+        tenant_name: data.tenant_name ?? '',
       }
       setUser(user)
     } catch (e: unknown) {
@@ -160,6 +162,8 @@ export default function LoginPage() {
         username: data.username ?? mfaUsername,
         role: data.role ?? 'underwriter',
         token: data.access_token,
+        tenant_id: data.tenant_id ?? '',
+        tenant_name: data.tenant_name ?? '',
       }
       setUser(user)
       message.success('Authenticated successfully')

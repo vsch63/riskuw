@@ -132,3 +132,8 @@ frontend/.pnpm-store/
 *:Zone.Identifier
 .env.docker
 .env.docker
+ssh_publickey
+ssh_publickey.pub
+id_ed25519.pub
+backend/routers/members.py.bak_fix
+backend/routers/members.py.bak_reorder

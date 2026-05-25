@@ -271,7 +271,7 @@ async def verify_mfa(body: MFAVerifyRequest, request: Request):
         _audit(conn, "MFA_SUCCESS", body.username, body.username, {"ip": ip}, ip)
         conn.commit()
 
-        return TokenResponse(access_token=token, username=body.username, role=role)
+        return TokenResponse(access_token=token, username=body.username, role=role, tenant_id=tenant_id)
     finally:
         release(conn)
 
@@ -283,21 +283,41 @@ async def list_users(current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT username, email, full_name, role, is_active, tenant_id::text "
-            "FROM uw_user WHERE is_deleted = false ORDER BY username",
-        )
+        if current.role == "super_admin":
+            # Super admin sees all users across all tenants
+            cur.execute("""
+                SELECT u.username, u.email, u.full_name, u.role,
+                       u.is_active, u.tenant_id::text,
+                       t.tenant_name, t.tenant_code
+                FROM uw_user u
+                LEFT JOIN tenant t ON t.id = u.tenant_id
+                WHERE u.is_deleted = false
+                ORDER BY t.tenant_name, u.username
+            """)
+        else:
+            # Admin/others see only their own tenant's users
+            cur.execute("""
+                SELECT u.username, u.email, u.full_name, u.role,
+                       u.is_active, u.tenant_id::text,
+                       t.tenant_name, t.tenant_code
+                FROM uw_user u
+                LEFT JOIN tenant t ON t.id = u.tenant_id
+                WHERE u.is_deleted = false
+                  AND u.tenant_id = %s::uuid
+                ORDER BY u.username
+            """, (current.tenant_id,))
         rows = cur.fetchall()
         cur.close()
         result = []
         for r in rows:
             try:
                 row_dict = dict(r) if hasattr(r, "keys") else dict(zip(
-                    ["username", "email", "full_name", "role", "is_active", "tenant_id"], r
+                    ["username", "email", "full_name", "role", "is_active",
+                     "tenant_id", "tenant_name", "tenant_code"], r
                 ))
-                # Ensure is_active is always a real bool
                 row_dict["is_active"] = bool(row_dict.get("is_active", False))
-                result.append(UserOut(**row_dict))
+                result.append(UserOut(**{k: v for k, v in row_dict.items()
+                                         if k in UserOut.model_fields}))
             except Exception as e:
                 print(f"DEBUG skipping bad user row {r}: {e}")
         return result
@@ -328,12 +348,29 @@ async def get_user(username: str, current: CurrentUser):
 async def register_user(body: UserCreate, current: CurrentUser):
     if current.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Only admins can create users")
+
+    # ── Tenant assignment ──────────────────────────────────────────
+    if current.role == "super_admin":
+        # Super admin must specify which tenant the user belongs to
+        tenant_id = body.tenant_id
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required for super_admin user creation")
+    else:
+        # Admin can only create users within their own tenant
+        tenant_id = current.tenant_id
+        if body.tenant_id and body.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail="Admins can only create users in their own tenant")
+
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM uw_user WHERE username = %s", (body.username,))
+        # Check username uniqueness within the tenant
+        cur.execute(
+            "SELECT 1 FROM uw_user WHERE username = %s AND tenant_id = %s::uuid",
+            (body.username, tenant_id)
+        )
         if cur.fetchone():
-            raise HTTPException(status_code=409, detail="Username already exists")
+            raise HTTPException(status_code=409, detail="Username already exists in this tenant")
         cur.execute(
             """
             INSERT INTO uw_user
@@ -346,7 +383,7 @@ async def register_user(body: UserCreate, current: CurrentUser):
             """,
             (
                 body.username, body.email, _hash(body.password),
-                body.full_name, body.role, body.tenant_id,
+                body.full_name, body.role, tenant_id,
                 current.username, current.username,
             ),
         )

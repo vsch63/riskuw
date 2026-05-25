@@ -55,6 +55,9 @@ interface User {
   role: string
   is_active: boolean
   last_login_at?: string
+  tenant_id?: string
+  tenant_name?: string
+  tenant_code?: string
 }
 
 // Modal styles — consistent dark surface
@@ -220,6 +223,15 @@ function AllUsersTab({ refresh }: { refresh: number }) {
       title: 'Last Login', dataIndex: 'last_login_at', width: 120,
       render: (v: string) => <span style={{ fontSize: 12, color: '#6b7280' }}>{relTime(v)}</span>,
     },
+    ...(me?.role === 'super_admin' ? [{
+      title: 'Tenant', dataIndex: 'tenant_name', width: 150,
+      render: (v: string, u: User) => (
+        <div>
+          <div style={{ fontSize: 12, color: '#9ca3af' }}>{v || '—'}</div>
+          {u.tenant_code && <div style={{ fontSize: 10, color: '#4b5563', fontFamily: 'var(--font-mono,monospace)' }}>{u.tenant_code}</div>}
+        </div>
+      ),
+    }] : []),
     {
       title: 'Actions', width: 120,
       render: (_: any, u: User) => (
@@ -334,9 +346,23 @@ function CreateUserTab({ onCreated }: { onCreated: () => void }) {
   const [loading, setLoading]       = useState(false)
   const [selectedRole, setSelectedRole] = useState('underwriter')
   const { user: me }                = useAuthStore()
+  const isSuperAdmin                = me?.role === 'super_admin'
+  const [tenants, setTenants]       = useState<{id:string, tenant_name:string, tenant_code:string}[]>([])
 
   const UW_ROLES = ['underwriter', 'senior_underwriter', 'admin']
   const showAuthority = UW_ROLES.includes(selectedRole)
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      api.get('/tenants/').then(r => {
+        setTenants(Array.isArray(r.data) ? r.data : [])
+        // Pre-select first tenant if only one exists
+        if (Array.isArray(r.data) && r.data.length === 1) {
+          form.setFieldValue('tenant_id', r.data[0].id)
+        }
+      }).catch(() => {})
+    }
+  }, [isSuperAdmin])
 
   const sectionStyle: React.CSSProperties = {
     background: 'rgba(255,255,255,0.02)',
@@ -361,7 +387,7 @@ function CreateUserTab({ onCreated }: { onCreated: () => void }) {
         password: v.password, role: v.role,
         effective_date: v.effective_date || null,
         expiry_date:    v.expiry_date    || null,
-        tenant_id: (me as any)?.tenant_id,
+        tenant_id: isSuperAdmin ? v.tenant_id : me?.tenant_id,
       })
       if (showAuthority && (v.min_face_amount || v.max_face_amount || v.notes)) {
         try {
@@ -398,6 +424,21 @@ function CreateUserTab({ onCreated }: { onCreated: () => void }) {
         {/* Account details */}
         <div style={sectionStyle}>
           <div style={sectionTitle}>Account Details</div>
+
+          {/* Tenant selector — super_admin only */}
+          {isSuperAdmin && (
+            <Form.Item name="tenant_id" label="Tenant" rules={[{ required: true, message: 'Please select a tenant' }]}
+              help="Select which insurance carrier this user belongs to">
+              <Select placeholder="Select tenant…" showSearch
+                optionFilterProp="label"
+                options={tenants.map(t => ({
+                  value: t.id,
+                  label: `${t.tenant_name} (${t.tenant_code})`,
+                }))}
+              />
+            </Form.Item>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
             {/* Left */}
             <div>

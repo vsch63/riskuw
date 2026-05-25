@@ -44,8 +44,10 @@ interface Tenant {
 interface AuditRow {
   id: string
   occurred_at: string
-  event_type: string
+  action: string
   actor: string
+  before_val?: any
+  after_val?: any
   notes?: string
 }
 
@@ -459,7 +461,7 @@ function NewTenantTab({ onCreated }: { onCreated: () => void }) {
 function TenantDetailTab({ tenant, onRefresh }: { tenant: Tenant|null; onRefresh: () => void }) {
   const [detail, setDetail]     = useState<Tenant|null>(null)
   const [audit, setAudit]       = useState<AuditRow[]>([])
-  const [loading, setLoading]   = useState(false)
+  const [loading, setLoading]   = useState(true)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving]     = useState(false)
   const [ef]                    = Form.useForm()
@@ -616,11 +618,16 @@ function TenantDetailTab({ tenant, onRefresh }: { tenant: Tenant|null; onRefresh
             : audit.map(a => (
               <div key={a.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 10, marginBottom: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{a.event_type}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{a.action}</span>
                   <span style={{ fontSize: 11, color: '#6b7280' }}>{relTime(a.occurred_at)}</span>
                 </div>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>by {a.actor}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>by {a.actor || '—'}</div>
                 {a.notes && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3 }}>{a.notes}</div>}
+                {(a.before_val || a.after_val) && (
+                  <div style={{ fontSize: 10, color: '#4b5563', marginTop: 4, fontFamily: 'var(--font-mono, monospace)' }}>
+                    {a.after_val && `→ ${JSON.stringify(a.after_val)}`}
+                  </div>
+                )}
               </div>
             ))
           }
@@ -703,3 +710,4 @@ export default function TenantManagementPage() {
     </div>
   )
 }
+

@@ -11,6 +11,8 @@ export interface LoginResponse {
   mfa_session_token?: string;
   username?: string;
   role?: string;
+  tenant_id?: string;
+  tenant_name?: string;
 }
 
 export interface MFAVerifyRequest {
@@ -23,6 +25,8 @@ export interface AuthUser {
   username: string;
   role: string;
   token: string;
+  tenant_id: string;
+  tenant_name?: string;
 }
 
 // ─── Products ────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ Member Data Registry — personal/contact info linked to UW cases via applicant_
 from __future__ import annotations
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, EmailStr
 from deps import CurrentUser
 from database import get_conn, release_conn
@@ -111,24 +111,183 @@ def list_members(
         release(conn)
 
 # ── Get single member ─────────────────────────────────────────────────────────
-@router.get("/{applicant_ref}")
-def get_member(applicant_ref: str, current: CurrentUser):
+@router.get("/upload-history")
+def upload_history(current: CurrentUser):
+    """MUST be before /{applicant_ref} to avoid route conflict."""
     conn, release = _db()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT * FROM applicant_master WHERE applicant_ref = %s",
-            (applicant_ref,)
-        )
-        row = cur.fetchone()
+        cur.execute("""
+            SELECT upload_ref, filename, total_rows, inserted, updated,
+                   skipped, errors, uploaded_by, uploaded_at, notes
+            FROM member_upload_log
+            ORDER BY uploaded_at DESC LIMIT 50
+        """)
+        rows = cur.fetchall()
+        result = []
+        for r in rows:
+            row = dict(r)                   # RealDictCursor already gives named dicts
+            if row.get("uploaded_at"):
+                row["uploaded_at"] = str(row["uploaded_at"])
+            result.append(row)
         cur.close()
-        if not row:
-            raise HTTPException(status_code=404, detail="Member not found")
-        return _fmt(dict(row))
+        return result
     finally:
         release(conn)
 
-# ── Create ────────────────────────────────────────────────────────────────────
+
+@router.post("/upload")
+async def upload_members(
+    current:     CurrentUser,
+    file:        UploadFile = File(...),
+    on_conflict: str        = Form("update"),
+    notes:       str        = Form(""),
+):
+    """Upload CSV or Excel file of member data."""
+    file_bytes = await file.read()
+    filename   = file.filename or "upload.csv"
+
+    # ── Parse file ────────────────────────────────────────────────────────────
+    rows = []
+    if filename.endswith((".xlsx", ".xls")):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
+            ws = wb.active
+            headers = None
+            for row in ws.iter_rows(values_only=True):
+                if headers is None:
+                    headers = [str(c).strip().lower() if c else "" for c in row]
+                else:
+                    rows.append(dict(zip(headers, [str(v).strip() if v is not None else "" for v in row])))
+        except ImportError:
+            raise HTTPException(status_code=400,
+                detail="openpyxl not installed — upload CSV instead")
+    else:
+        text   = file_bytes.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text))
+        rows   = [{k.strip().lower(): (v or "").strip() for k, v in r.items()} for r in reader]
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="File is empty or unreadable")
+    if "applicant_ref" not in rows[0]:
+        raise HTTPException(status_code=400, detail="Missing required column: applicant_ref")
+
+    inserted   = updated = skipped = errors = 0
+    error_rows = []  # track failed rows with reason
+    upload_ref = str(uuid.uuid4())[:8].upper()
+
+    # ── Process each row with its OWN connection (no shared transaction) ──────
+    for i, row in enumerate(rows, 1):
+        ref = row.get("applicant_ref", "").strip()
+        if not ref:
+            errors += 1
+            error_rows.append({"row": i, "applicant_ref": "", "reason": "Missing applicant_ref"})
+            continue
+
+        def g(k, default=None):
+            v = row.get(k, "").strip()
+            return v if v and v.lower() != "none" else default
+
+        # Validate DOB if present
+        dob_val = g("dob")
+        if dob_val:
+            import re
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', dob_val):
+                errors += 1
+                error_rows.append({"row": i, "applicant_ref": ref,
+                    "reason": f"Invalid dob format '{dob_val}' — use YYYY-MM-DD"})
+                continue
+
+        # Each row gets its own connection to avoid shared transaction failure
+        row_conn, row_release = _db()
+        try:
+            cur = row_conn.cursor()
+            cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (ref,))
+            exists = cur.fetchone()
+
+            if exists:
+                if on_conflict == "skip":
+                    skipped += 1
+                    cur.close()
+                    continue
+                cur.execute("""
+                    UPDATE applicant_master SET
+                        full_name=%s, email=%s, phone=%s, mobile=%s,
+                        dob=%s, gender=%s, address_line1=%s, address_line2=%s,
+                        city=%s, state=%s, pincode=%s, country=%s,
+                        occupation=%s, group_name=%s, employee_id=%s,
+                        department=%s, nominee_name=%s, nominee_relation=%s,
+                        updated_at=now()
+                    WHERE applicant_ref=%s
+                """, (
+                    g("full_name"), g("email"), g("phone"), g("mobile"),
+                    g("dob"), g("gender"), g("address_line1"), g("address_line2"),
+                    g("city"), g("state"), g("pincode"), g("country","India"),
+                    g("occupation"), g("group_name"), g("employee_id"),
+                    g("department"), g("nominee_name"), g("nominee_relation"),
+                    ref,
+                ))
+                row_conn.commit()
+                updated += 1
+            else:
+                cur.execute("""
+                    INSERT INTO applicant_master (
+                        applicant_ref, full_name, email, phone, mobile,
+                        dob, gender, address_line1, address_line2,
+                        city, state, pincode, country, occupation,
+                        group_name, employee_id, department,
+                        nominee_name, nominee_relation,
+                        is_active, source, uploaded_by
+                    ) VALUES (
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                        true,'UPLOAD',%s
+                    )
+                """, (
+                    ref, g("full_name",""), g("email"), g("phone"), g("mobile"),
+                    g("dob"), g("gender"), g("address_line1"), g("address_line2"),
+                    g("city"), g("state"), g("pincode"), g("country","India"),
+                    g("occupation"), g("group_name"), g("employee_id"),
+                    g("department"), g("nominee_name"), g("nominee_relation"),
+                    current.username,
+                ))
+                row_conn.commit()
+                inserted += 1
+            cur.close()
+        except Exception as e:
+            row_conn.rollback()
+            errors += 1
+            error_rows.append({"row": i, "applicant_ref": ref, "reason": str(e)})
+        finally:
+            row_release(row_conn)
+
+    # ── Log upload ────────────────────────────────────────────────────────────
+    log_conn, log_release = _db()
+    try:
+        cur = log_conn.cursor()
+        cur.execute("""
+            INSERT INTO member_upload_log
+                (upload_ref, filename, total_rows, inserted, updated,
+                 skipped, errors, uploaded_by, notes)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (upload_ref, filename, len(rows), inserted, updated,
+              skipped, errors, current.username, notes))
+        log_conn.commit()
+        cur.close()
+    finally:
+        log_release(log_conn)
+
+    return {
+        "upload_ref": upload_ref,
+        "filename":   filename,
+        "total_rows": len(rows),
+        "inserted":   inserted,
+        "updated":    updated,
+        "skipped":    skipped,
+        "errors":     errors,
+        "error_details": error_rows[:100],  # first 100 errors
+    }
 @router.post("", status_code=201)
 def create_member(body: MemberIn, current: CurrentUser):
     conn, release = _db()
@@ -177,6 +336,24 @@ def create_member(body: MemberIn, current: CurrentUser):
         release(conn)
 
 # ── Update ────────────────────────────────────────────────────────────────────
+@router.get("/{applicant_ref}")
+def get_member(applicant_ref: str, current: CurrentUser):
+    conn, release = _db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM applicant_master WHERE applicant_ref = %s",
+            (applicant_ref,)
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Member not found")
+        return _fmt(dict(row))
+    finally:
+        release(conn)
+
+# ── Create ────────────────────────────────────────────────────────────────────
 @router.put("/{applicant_ref}")
 def update_member(applicant_ref: str, body: MemberIn, current: CurrentUser):
     conn, release = _db()
@@ -258,167 +435,3 @@ def get_uw_history(applicant_ref: str, current: CurrentUser):
 import io, csv, uuid
 from fastapi import UploadFile, File, Form
 
-@router.post("/upload")
-async def upload_members(
-    current:    CurrentUser,
-    file:       UploadFile = File(...),
-    on_conflict: str       = Form("update"),  # "update" | "skip"
-    notes:      str        = Form(""),
-):
-    """Upload CSV or Excel file of member data."""
-    conn, release = _db()
-    try:
-        content = await file.read()
-        filename = file.filename or "upload.csv"
-
-        # Parse file
-        rows = []
-        if filename.endswith((".xlsx", ".xls")):
-            try:
-                import openpyxl
-                wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
-                ws = wb.active
-                headers = None
-                for row in ws.iter_rows(values_only=True):
-                    if headers is None:
-                        headers = [str(c).strip().lower() if c else "" for c in row]
-                    else:
-                        rows.append(dict(zip(headers, row)))
-            except ImportError:
-                raise HTTPException(status_code=400,
-                    detail="openpyxl not installed — upload CSV instead")
-        else:
-            text = content.decode("utf-8-sig")
-            reader = csv.DictReader(io.StringIO(text))
-            rows = [{k.strip().lower(): v for k, v in r.items()} for r in reader]
-
-        if not rows:
-            raise HTTPException(status_code=400, detail="File is empty or unreadable")
-
-        # Required column
-        if "applicant_ref" not in (rows[0].keys() if rows else []):
-            raise HTTPException(status_code=400,
-                detail="Missing required column: applicant_ref")
-
-        inserted = updated = skipped = errors = 0
-        upload_ref = str(uuid.uuid4())[:8].upper()
-        cur = conn.cursor()
-
-        for row in rows:
-            ref = str(row.get("applicant_ref", "")).strip()
-            if not ref:
-                errors += 1
-                continue
-            try:
-                # Check if exists
-                cur.execute(
-                    "SELECT id FROM applicant_master WHERE applicant_ref=%s", (ref,)
-                )
-                exists = cur.fetchone()
-
-                def g(k, default=None):
-                    v = row.get(k)
-                    return str(v).strip() if v not in (None, "", "None") else default
-
-                if exists:
-                    if on_conflict == "skip":
-                        skipped += 1
-                        continue
-                    cur.execute("""
-                        UPDATE applicant_master SET
-                            full_name=%s, email=%s, phone=%s, mobile=%s,
-                            dob=%s, gender=%s, address_line1=%s, address_line2=%s,
-                            city=%s, state=%s, pincode=%s, country=%s,
-                            occupation=%s, group_name=%s, employee_id=%s,
-                            department=%s, nominee_name=%s, nominee_relation=%s,
-                            updated_at=now()
-                        WHERE applicant_ref=%s
-                    """, (
-                        g("full_name"), g("email"), g("phone"), g("mobile"),
-                        g("dob"), g("gender"), g("address_line1"), g("address_line2"),
-                        g("city"), g("state"), g("pincode"), g("country","India"),
-                        g("occupation"), g("group_name"), g("employee_id"),
-                        g("department"), g("nominee_name"), g("nominee_relation"),
-                        ref,
-                    ))
-                    updated += 1
-                else:
-                    cur.execute("""
-                        INSERT INTO applicant_master (
-                            applicant_ref, full_name, email, phone, mobile,
-                            dob, gender, address_line1, address_line2,
-                            city, state, pincode, country, occupation,
-                            group_name, employee_id, department,
-                            nominee_name, nominee_relation,
-                            is_active, source, uploaded_by
-                        ) VALUES (
-                            %s,%s,%s,%s,%s, %s,%s,%s,%s,
-                            %s,%s,%s,%s,%s, %s,%s,%s,
-                            %s,%s, true,'UPLOAD',%s
-                        )
-                    """, (
-                        ref, g("full_name",""), g("email"), g("phone"), g("mobile"),
-                        g("dob"), g("gender"), g("address_line1"), g("address_line2"),
-                        g("city"), g("state"), g("pincode"), g("country","India"),
-                        g("occupation"), g("group_name"), g("employee_id"),
-                        g("department"), g("nominee_name"), g("nominee_relation"),
-                        current.username,
-                    ))
-                    inserted += 1
-            except Exception as e:
-                errors += 1
-                conn.rollback()
-                continue
-
-        conn.commit()
-
-        # Log upload
-        cur.execute("""
-            INSERT INTO member_upload_log
-                (upload_ref, filename, total_rows, inserted, updated,
-                 skipped, errors, uploaded_by, notes)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (
-            upload_ref, filename, len(rows),
-            inserted, updated, skipped, errors,
-            current.username, notes,
-        ))
-        conn.commit()
-        cur.close()
-
-        return {
-            "upload_ref": upload_ref,
-            "filename":   filename,
-            "total_rows": len(rows),
-            "inserted":   inserted,
-            "updated":    updated,
-            "skipped":    skipped,
-            "errors":     errors,
-        }
-    finally:
-        release(conn)
-
-
-@router.get("/upload-history")
-def upload_history(current: CurrentUser):
-    conn, release = _db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT upload_ref, filename, total_rows, inserted, updated,
-                   skipped, errors, uploaded_by, uploaded_at, notes
-            FROM member_upload_log
-            ORDER BY uploaded_at DESC LIMIT 50
-        """)
-        rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-        result = []
-        for r in rows:
-            row = dict(zip(cols, r))
-            if row.get("uploaded_at"):
-                row["uploaded_at"] = str(row["uploaded_at"])
-            result.append(row)
-        cur.close()
-        return result
-    finally:
-        release(conn)

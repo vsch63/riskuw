@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   Button, Input, Select, Switch, InputNumber, Spin,
   message, Tag, Table, Tabs, Upload, Checkbox, Progress,
@@ -6,8 +6,7 @@ import {
 } from 'antd'
 import {
   UploadOutlined, ReloadOutlined, DownloadOutlined,
-  ClockCircleOutlined, BarChartOutlined, CalendarOutlined,
-  CheckCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined,
+  BarChartOutlined, CalendarOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
 
@@ -29,19 +28,19 @@ const secTitle: React.CSSProperties = {
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface BatchJob {
   id: string; job_number: string; job_name: string; status: string
-  total_records: number; approved: number; declined: number
-  referred: number; errored: number; processed: number
+  total_records: number; approved_count: number; declined_count: number
+  referred_count: number; errored_count: number; processed_count: number
   dry_run: boolean; submitted_at: string; completed_at: string
   submitted_by: string; input_filename: string; error_message: string
 }
 
 const STATUS_COLOR: Record<string,string> = {
-  COMPLETED:'#22c55e', PROCESSING:'#f59e0b', QUEUED:'#3b82f6',
-  PENDING:'#3b82f6', FAILED:'#ef4444', CANCELLED:'#6b7280',
+  COMPLETED:'#22c55e', RUNNING:'#f59e0b', PROCESSING:'#f59e0b',
+  QUEUED:'#3b82f6', PENDING:'#3b82f6', FAILED:'#ef4444', CANCELLED:'#6b7280',
 }
 const STATUS_ICON: Record<string,string> = {
-  COMPLETED:'🟢', PROCESSING:'🟡', QUEUED:'⏳',
-  PENDING:'⏳', FAILED:'🔴', CANCELLED:'⚫',
+  COMPLETED:'🟢', RUNNING:'🟡', PROCESSING:'🟡',
+  QUEUED:'⏳', PENDING:'⏳', FAILED:'🔴', CANCELLED:'⚫',
 }
 
 // ── CSV Template ───────────────────────────────────────────────────────────────
@@ -70,7 +69,6 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
   const [valErrors, setValErrors]   = useState<string[]>([])
   const [valWarnings, setValWarn]   = useState<string[]>([])
 
-  // Diagnose form
   const [diagProd, setDiagProd]   = useState('IND-TERM-20')
   const [diagAge, setDiagAge]     = useState(30)
   const [diagGender, setDiagGen]  = useState('MALE')
@@ -99,7 +97,6 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
 
     if (!file) { setValErrors(['Please select a file to upload.']); return }
 
-    // Basic client-side validation
     const text = await file.text()
     const lines = text.split('\n').filter(l => l.trim())
     if (lines.length < 2) { setValErrors(['File appears empty — no data rows found.']); return }
@@ -112,15 +109,9 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
       }
     }
 
-    if (errors.length && !skipProdErr) {
-      setValErrors(errors); return
-    }
-    if (errors.length && skipProdErr) {
-      warnings.push(...errors)
-      setValWarn(warnings)
-    }
+    if (errors.length && !skipProdErr) { setValErrors(errors); return }
+    if (errors.length && skipProdErr) { warnings.push(...errors); setValWarn(warnings) }
 
-    // Submit
     setSubmitting(true)
     try {
       const formData = new FormData()
@@ -141,8 +132,7 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
       setFile(null); setJobName('')
     } catch(e:any) {
       message.error(e?.response?.data?.detail || 'Upload failed')
-    }
-    finally { setSubmitting(false) }
+    } finally { setSubmitting(false) }
   }
 
   const runDiagnose = async () => {
@@ -159,13 +149,11 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
       setDiagRes(r.data)
     } catch(e:any) {
       setDiagRes({ error: e?.response?.data?.detail || e.message })
-    }
-    finally { setDiagRun(false) }
+    } finally { setDiagRun(false) }
   }
 
   return (
     <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:24 }}>
-      {/* Left — Upload Form */}
       <div>
         <div style={card}>
           <div style={secTitle}>Upload Batch File</div>
@@ -199,16 +187,12 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
             <div>
               <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Policy Effective Date</div>
               <Input type="date" value={effDate} onChange={e => setEff(e.target.value)}/>
-              <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>
-                Start date applied to all policies in this batch.
-              </div>
+              <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>Start date applied to all policies in this batch.</div>
             </div>
             <div>
               <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Policy Expire Date</div>
               <Input type="date" value={expDate} onChange={e => setExp(e.target.value)}/>
-              <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>
-                End date for all policies. Leave blank if not applicable.
-              </div>
+              <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>End date for all policies. Leave blank if not applicable.</div>
             </div>
           </div>
 
@@ -291,7 +275,6 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
             </div>
           </div>
 
-          {/* Validation errors */}
           {valWarnings.map((w,i) => (
             <div key={i} style={{ background:'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.2)', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#fbbf24', marginBottom:8 }}>
               ⚠️ {w}
@@ -309,7 +292,6 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
           </Button>
         </div>
 
-        {/* Diagnose tool */}
         <Collapse ghost style={{ background:'rgba(255,255,255,0.01)', border:'1px solid rgba(255,255,255,0.07)', borderRadius:10 }}>
           <Panel header={<span style={{ fontSize:13, color:'#9ca3af' }}>🔬 Diagnose SY001 errors — test a single record</span>} key="1">
             <div style={{ fontSize:12, color:'#6b7280', marginBottom:12 }}>
@@ -349,7 +331,6 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
         </Collapse>
       </div>
 
-      {/* Right — Resources */}
       <div>
         <div style={card}>
           <div style={secTitle}>Resources</div>
@@ -409,27 +390,27 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
 // TAB 2 — Job Monitor
 // ══════════════════════════════════════════════════════════════════════════════
 function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => void }) {
-  const [jobs, setJobs]         = useState<BatchJob[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [autoRefresh, setAuto]  = useState(false)
-  const timerRef                = useRef<ReturnType<typeof setInterval>|null>(null)
+  const [jobs, setJobs]        = useState<BatchJob[]>([])
+  const [loading, setLoading]  = useState(true)
+  const [autoRefresh, setAuto] = useState(true)
+  const timerRef               = useRef<ReturnType<typeof setInterval>|null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const r = await api.get('/batch/jobs')
       const list = r.data?.jobs || r.data || []
       setJobs(Array.isArray(list) ? list : [])
     } catch { setJobs([]) }
     finally { setLoading(false) }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current)
     if (autoRefresh) timerRef.current = setInterval(load, 5000)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [autoRefresh])
+  }, [autoRefresh, load])
 
   const cancelJob = async (id: string) => {
     try { await api.post(`/batch/jobs/${id}/cancel`); message.success('Job cancelled'); load() }
@@ -437,14 +418,13 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
   }
 
   const statusOrder: Record<string,number> = { PROCESSING:0, QUEUED:1, PENDING:1, FAILED:2, COMPLETED:3, CANCELLED:4 }
-  const sorted = [...jobs].sort((a,b) => (statusOrder[a.status]??5) - (statusOrder[b.status]??5))
-
-  const total    = jobs.length
-  const processing = jobs.filter(j => j.status === 'PROCESSING').length
+  const sorted = jobs
+  const total      = jobs.length
+  const processing = jobs.filter(j => ['RUNNING','PROCESSING','QUEUED','PENDING'].includes(j.status)).length
   const completed  = jobs.filter(j => j.status === 'COMPLETED').length
   const failed     = jobs.filter(j => ['FAILED','CANCELLED'].includes(j.status)).length
   const recTotal   = jobs.reduce((s,j) => s + (j.total_records||0), 0)
-  const recProc    = jobs.reduce((s,j) => s + (j.processed||0), 0)
+  const recProc    = jobs.reduce((s,j) => s + (j.processed_count||0), 0)
 
   return (
     <div>
@@ -458,13 +438,12 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
       </div>
       {autoRefresh && <div style={{ fontSize:11, color:'#00d4aa', marginBottom:12 }}>🔄 Auto-refresh ON — refreshing every 5 seconds</div>}
 
-      {/* Stats */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:10, marginBottom:20 }}>
         {[
-          { label:'Total Jobs',    value:total,      color:'#00d4aa' },
-          { label:'🟡 Processing', value:processing, color:'#f59e0b' },
-          { label:'🟢 Completed',  value:completed,  color:'#22c55e' },
-          { label:'🔴 Failed',     value:failed,     color:'#ef4444' },
+          { label:'Total Jobs',    value:total,                     color:'#00d4aa' },
+          { label:'🟡 Processing', value:processing,                color:'#f59e0b' },
+          { label:'🟢 Completed',  value:completed,                 color:'#22c55e' },
+          { label:'🔴 Failed',     value:failed,                    color:'#ef4444' },
           { label:'Records Total', value:recTotal.toLocaleString(), color:'#9ca3af' },
           { label:'Processed',     value:recProc.toLocaleString(),  color:'#9ca3af' },
         ].map(s => (
@@ -480,14 +459,14 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
           No batch jobs yet. Upload a file in the Upload Batch tab to get started.
         </div>
       ) : sorted.map(job => {
-        const isActive = ['PROCESSING','QUEUED','PENDING'].includes(job.status)
-        const total    = job.total_records || 1
-        const proc     = job.processed || 0
-        const pct      = Math.round((proc / total) * 100)
-        const appr     = job.approved || 0
-        const decl     = job.declined || 0
-        const ref      = job.referred || 0
-        const err      = job.errored  || 0
+        const isActive = ['RUNNING','PROCESSING','QUEUED','PENDING'].includes(job.status)
+        const jobTotal = job.total_records || 1
+        const proc     = job.processed_count || 0
+        const pct      = Math.round((proc / jobTotal) * 100)
+        const appr     = job.approved_count  || 0
+        const decl     = job.declined_count  || 0
+        const ref      = job.referred_count  || 0
+        const err      = job.errored_count   || 0
 
         return (
           <div key={job.id} style={{ ...card, marginBottom:12 }}>
@@ -507,22 +486,22 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
             {isActive && (
               <div style={{ marginBottom:12 }}>
                 <Progress percent={pct} size="small" strokeColor="#00d4aa"
-                  format={() => `${proc.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`}/>
+                  format={() => `${proc.toLocaleString()} / ${jobTotal.toLocaleString()} (${pct}%)`}/>
                 <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>
-                  🔄 Turn on ⚡ Auto above to auto-refresh every 5 seconds
+                  🔄 Auto-refresh is ON — updating every 5 seconds
                 </div>
               </div>
             )}
 
-            {job.status === 'COMPLETED' && (
+            { (job.status === 'COMPLETED'  || job.status === 'RUNNING') && (
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:12 }}>
                   {[
-                    { label:'✅ Approved', value:appr, color:'#22c55e' },
-                    { label:'🔴 Declined', value:decl, color:'#ef4444' },
-                    { label:'🟡 Referred', value:ref,  color:'#f59e0b' },
-                    { label:'⚫ Errors',   value:err,  color:'#6b7280' },
-                    { label:'📊 Processed',value:proc, color:'#9ca3af' },
+                    { label:'✅ Approved',  value:appr, color:'#22c55e' },
+                    { label:'🔴 Declined',  value:decl, color:'#ef4444' },
+                    { label:'🟡 Referred',  value:ref,  color:'#f59e0b' },
+                    { label:'⚫ Errors',    value:err,  color:'#6b7280' },
+                    { label:'📊 Processed', value:proc, color:'#9ca3af' },
                   ].map(s => (
                     <div key={s.label} style={{ background:'rgba(255,255,255,0.02)', borderRadius:6, padding:'8px 10px' }}>
                       <div style={{ fontSize:14, fontWeight:700, color:s.color }}>{s.value.toLocaleString()}</div>
@@ -530,19 +509,22 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
                     </div>
                   ))}
                 </div>
-                {/* Decision bar */}
-                <div style={{ display:'flex', height:8, borderRadius:4, overflow:'hidden', marginBottom:6 }}>
-                  <div style={{ width:`${Math.round(appr/total*100)}%`, background:'#22c55e' }}/>
-                  <div style={{ width:`${Math.round(ref/total*100)}%`,  background:'#f59e0b' }}/>
-                  <div style={{ width:`${Math.round(decl/total*100)}%`, background:'#ef4444' }}/>
-                  <div style={{ width:`${Math.round(err/total*100)}%`,  background:'#6b7280' }}/>
-                </div>
-                <div style={{ fontSize:11, color:'#6b7280', marginBottom:10 }}>
-                  🟢 {Math.round(appr/total*100)}% approved &nbsp;
-                  🟡 {Math.round(ref/total*100)}% referred &nbsp;
-                  🔴 {Math.round(decl/total*100)}% declined &nbsp;
-                  ⚫ {Math.round(err/total*100)}% errors
-                </div>
+                {job.status === 'COMPLETED' && (
+                  <>
+                    <div style={{ display:'flex', height:8, borderRadius:4, overflow:'hidden', marginBottom:6 }}>
+                      <div style={{ width:`${Math.round(appr/jobTotal*100)}%`, background:'#22c55e' }}/>
+                      <div style={{ width:`${Math.round(ref/jobTotal*100)}%`,  background:'#f59e0b' }}/>
+                      <div style={{ width:`${Math.round(decl/jobTotal*100)}%`, background:'#ef4444' }}/>
+                      <div style={{ width:`${Math.round(err/jobTotal*100)}%`,  background:'#6b7280' }}/>
+                    </div>
+                    <div style={{ fontSize:11, color:'#6b7280', marginBottom:10 }}>
+                      🟢 {Math.round(appr/jobTotal*100)}% approved &nbsp;
+                      🟡 {Math.round(ref/jobTotal*100)}% referred &nbsp;
+                      🔴 {Math.round(decl/jobTotal*100)}% declined &nbsp;
+                      ⚫ {Math.round(err/jobTotal*100)}% errors
+                    </div>
+                  </>
+                )}
               </>
             )}
 
@@ -568,7 +550,7 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
                   </Button>
                 </>
               )}
-              {['PENDING','QUEUED'].includes(job.status) && (
+              {['RUNNING','PENDING','QUEUED'].includes(job.status) && (
                 <Button size="small" danger onClick={() => cancelJob(job.id)}>⏹️ Cancel Job</Button>
               )}
             </div>
@@ -583,16 +565,16 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
 // TAB 3 — Results & Downloads
 // ══════════════════════════════════════════════════════════════════════════════
 function ResultsTab({ initialJobId }: { initialJobId?: string }) {
-  const [jobs, setJobs]         = useState<BatchJob[]>([])
-  const [selJob, setSelJob]     = useState(initialJobId || '')
-  const [detail, setDetail]     = useState<BatchJob|null>(null)
-  const [loading, setLoading]   = useState(true)
-  const [dlLoading, setDlLoad]  = useState<string|null>(null)
+  const [jobs, setJobs]        = useState<BatchJob[]>([])
+  const [selJob, setSelJob]    = useState(initialJobId || '')
+  const [detail, setDetail]    = useState<BatchJob|null>(null)
+  const [loading, setLoading]  = useState(true)
+  const [dlLoading, setDlLoad] = useState<string|null>(null)
 
   useEffect(() => {
     api.get('/batch/jobs').then(r => {
       const list = (r.data?.jobs || r.data || []) as BatchJob[]
-      const done = list.filter(j => j.status === 'COMPLETED')
+      const done = list.filter(j => j.status === 'COMPLETED' || j.status === 'DRY_RUN_COMPLETE')
       setJobs(done)
       if (!selJob && done.length > 0) setSelJob(done[0].id)
     }).catch(() => {}).finally(() => setLoading(false))
@@ -627,11 +609,11 @@ function ResultsTab({ initialJobId }: { initialJobId?: string }) {
   if (loading) return <Spin/>
   if (jobs.length === 0) return <div style={{ color:'#6b7280', fontSize:13 }}>No completed jobs yet.</div>
 
-  const total  = detail?.total_records || 1
-  const appr   = detail?.approved || 0
-  const decl   = detail?.declined || 0
-  const ref    = detail?.referred || 0
-  const err    = detail?.errored  || 0
+  const total = detail?.total_records  || 1
+  const appr  = detail?.approved_count || 0
+  const decl  = detail?.declined_count || 0
+  const ref   = detail?.referred_count || 0
+  const err   = detail?.errored_count  || 0
 
   return (
     <div>
@@ -736,10 +718,10 @@ function ScheduleTab() {
   }
 
   const PRESETS = [
-    { label:'Daily at 2am',     value:'0 2 * * *'   },
-    { label:'Weekly Monday 2am',value:'0 2 * * 1'   },
-    { label:'Monthly 1st 2am',  value:'0 2 1 * *'   },
-    { label:'Every 6 hours',    value:'0 */6 * * *' },
+    { label:'Daily at 2am',      value:'0 2 * * *'   },
+    { label:'Weekly Monday 2am', value:'0 2 * * 1'   },
+    { label:'Monthly 1st 2am',   value:'0 2 1 * *'   },
+    { label:'Every 6 hours',     value:'0 */6 * * *' },
   ]
 
   return (
@@ -749,18 +731,17 @@ function ScheduleTab() {
         <div style={{ fontSize:13, color:'#6b7280', marginBottom:16 }}>
           Configure recurring batch jobs that run automatically on a cron schedule.
         </div>
-
         {loading ? <Spin/> : schedules.length === 0 ? (
           <div style={{ color:'#6b7280', fontSize:13, marginBottom:16 }}>No schedules configured yet.</div>
         ) : (
           <Table dataSource={schedules} rowKey="id" size="small" pagination={false}
             style={{ marginBottom:16 }}
             columns={[
-              { title:'Name',       dataIndex:'schedule_name' },
-              { title:'Cron',       dataIndex:'cron_expression', render:(v:string) => <code style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</code> },
-              { title:'Status',     dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'default'}>{v?'Active':'Paused'}</Tag> },
-              { title:'Last run',   dataIndex:'last_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
-              { title:'Next run',   dataIndex:'next_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
+              { title:'Name',     dataIndex:'schedule_name' },
+              { title:'Cron',     dataIndex:'cron_expression', render:(v:string) => <code style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</code> },
+              { title:'Status',   dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'default'}>{v?'Active':'Paused'}</Tag> },
+              { title:'Last run', dataIndex:'last_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
+              { title:'Next run', dataIndex:'next_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
               { title:'', width:100, render:(_:any, r:any) => (
                 <Switch checked={r.is_active} size="small" onChange={() => toggle(r.id, r.is_active)}/>
               )},
@@ -800,8 +781,8 @@ function ScheduleTab() {
 // PAGE SHELL
 // ══════════════════════════════════════════════════════════════════════════════
 export default function BatchJobsPage() {
-  const [activeTab, setTab]   = useState('upload')
-  const [viewJobId, setView]  = useState<string|undefined>()
+  const [activeTab, setTab]  = useState('upload')
+  const [viewJobId, setView] = useState<string|undefined>()
 
   const handleSubmitted = (jobId: string) => {
     setView(jobId); setTab('monitor')
@@ -849,4 +830,5 @@ export default function BatchJobsPage() {
     </div>
   )
 }
+
 
