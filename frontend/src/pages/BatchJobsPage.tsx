@@ -63,11 +63,12 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
   const [slaHours, setSla]          = useState(48)
   const [routeMed, setRouteMed]     = useState(true)
   const [aiScore, setAiScore]       = useState(false)
-  const [aiEngine, setAiEngine]     = useState('xgboost')
   const [sendEmail, setSendEmail]   = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [valErrors, setValErrors]   = useState<string[]>([])
   const [valWarnings, setValWarn]   = useState<string[]>([])
+  const [aiEngine, setAiEngine]     = useState('rules_only')
+  const [uploadKey, setUploadKey]   = useState(0)
 
   const [diagProd, setDiagProd]   = useState('IND-TERM-20')
   const [diagAge, setDiagAge]     = useState(30)
@@ -120,6 +121,7 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
         job_name: jobName || 'Batch Job',
         dry_run: String(dryRun),
         skip_product_errors: String(skipProdErr),
+        ai_engine: aiEngine,
         ...(effDate && { policy_effective_date: effDate }),
         ...(expDate && { policy_expire_date: expDate }),
       })
@@ -129,7 +131,7 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
       const d = r.data
       message.success(`✅ Job queued: ${d.job_number}`)
       onSubmitted(d.job_id || d.id || '')
-      setFile(null); setJobName('')
+      setFile(null); setJobName(''); setAiEngine('rules_only'); setUploadKey(k => k+1)
     } catch(e:any) {
       message.error(e?.response?.data?.detail || 'Upload failed')
     } finally { setSubmitting(false) }
@@ -172,7 +174,7 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
               Select CSV or Excel file
               <span style={{ color:'#4b5563', marginLeft:8 }}>Limit 200MB • CSV, XLSX, XLS</span>
             </div>
-            <Dragger accept=".csv,.xlsx,.xls" maxCount={1} beforeUpload={f => { setFile(f); return false }}
+            <Dragger key={uploadKey} accept=".csv,.xlsx,.xls" maxCount={1} beforeUpload={f => { setFile(f); return false }}
               onRemove={() => setFile(null)}
               style={{ background:'rgba(255,255,255,0.02)', border:'1px dashed rgba(255,255,255,0.15)' }}>
               <p style={{ color:'#6b7280', margin:0 }}>
@@ -240,25 +242,25 @@ function UploadTab({ onSubmitted }: { onSubmitted: (jobId: string) => void }) {
           </div>
 
           <div style={{ borderTop:'1px solid rgba(255,255,255,0.07)', paddingTop:16, marginBottom:16 }}>
-            <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:'#9ca3af', cursor:'pointer', marginBottom:4 }}>
-              <Checkbox checked={aiScore} onChange={e => setAiScore(e.target.checked)}/>
-              🤖 Enable AI Risk Scoring for each row
-            </label>
-            <div style={{ fontSize:11, color:'#6b7280', paddingLeft:24, marginBottom:10 }}>
-              Runs an AI model in addition to the standard rules engine for enhanced risk assessment.
+            <div style={{ fontSize:13, fontWeight:600, color:'#9ca3af', marginBottom:8 }}>
+              🤖 AI Risk Scoring Engine
             </div>
-            {aiScore && (
-              <div style={{ paddingLeft:24 }}>
-                <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>AI Engine for Batch Scoring</div>
-                <Select value={aiEngine} onChange={setAiEngine} style={{ width:'100%', maxWidth:300 }}>
-                  <Option value="xgboost">XGBoost ML Model</Option>
-                  <Option value="rules_only">Rules Only</Option>
-                  <Option value="ollama">Ollama LLM (AI Server)</Option>
-                  <Option value="claude">Claude AI (Anthropic)</Option>
-                </Select>
-                <div style={{ fontSize:11, color:'#4b5563', marginTop:6 }}>
-                  AI scoring adds ~20–50ms per row. For 1,000 rows expect ~30–60 seconds extra.
-                </div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:10 }}>
+              Select an AI engine to get an independent risk score alongside the rules engine decision.
+              Default is Rules Engine only — no AI scoring.
+            </div>
+            <Select value={aiEngine} onChange={setAiEngine} style={{ width:'100%', maxWidth:360 }}>
+              <Option value="rules_only">📋 Rules Engine Only (Default)</Option>
+              <Option value="xgboost">⚡ XGBoost ML (Fast, local ML model)</Option>
+              <Option value="ollama">🦙 Ollama LLM (Local AI — llava-llama3)</Option>
+              <Option value="claude">🧠 Claude AI (Anthropic — requires API key)</Option>
+            </Select>
+            {aiEngine !== 'rules_only' && (
+              <div style={{ fontSize:11, color:'#fbbf24', marginTop:8 }}>
+                ⚠️ AI scoring adds processing time per row.
+                {aiEngine === 'xgboost' && ' XGBoost adds ~5ms per row.'}
+                {aiEngine === 'ollama'  && ' Ollama adds ~30-60 seconds per row — use for small batches only.'}
+                {aiEngine === 'claude'  && ' Claude API adds ~2-3 seconds per row and incurs API costs.'}
               </div>
             )}
           </div>
@@ -493,7 +495,7 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
               </div>
             )}
 
-            { (job.status === 'COMPLETED'  || job.status === 'RUNNING') && (
+            { (job.status === 'COMPLETED' || job.status === 'DRY_RUN_COMPLETE' || job.status === 'RUNNING') && (
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:12 }}>
                   {[
@@ -567,6 +569,7 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
 function ResultsTab({ initialJobId }: { initialJobId?: string }) {
   const [jobs, setJobs]        = useState<BatchJob[]>([])
   const [selJob, setSelJob]    = useState(initialJobId || '')
+  useEffect(() => { if (initialJobId) setSelJob(initialJobId) }, [initialJobId])
   const [detail, setDetail]    = useState<BatchJob|null>(null)
   const [loading, setLoading]  = useState(true)
   const [dlLoading, setDlLoad] = useState<string|null>(null)
@@ -582,24 +585,26 @@ function ResultsTab({ initialJobId }: { initialJobId?: string }) {
 
   useEffect(() => {
     if (!selJob) return
-    api.get(`/batch/jobs/${selJob}`).then(r => setDetail(r.data)).catch(() => {
-      const found = jobs.find(j => j.id === selJob)
-      if (found) setDetail(found)
-    })
+    api.get(`/batch/jobs/${selJob}`)
+      .then(r => setDetail(r.data))
+      .catch(() => {
+        const found = jobs.find(j => j.id === selJob)
+        if (found) setDetail(found)
+      })
   }, [selJob])
 
   const download = async (type: 'results'|'errors'|'summary', fmt: 'csv'|'xlsx') => {
     const key = `${type}_${fmt}`
     setDlLoad(key)
     try {
-      const r = await api.get(`/batch/jobs/${selJob}/download/${type}`, {
-        params: { fmt }, responseType: 'blob',
-      })
       const ext  = fmt === 'xlsx' ? 'xlsx' : 'csv'
       const mime = fmt === 'xlsx'
         ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv'
-      const url  = URL.createObjectURL(new Blob([r.data], { type: mime }))
-      const a    = document.createElement('a')
+      const r = await api.get(`/batch/jobs/${selJob}/download/${type}?fmt=${fmt}`, {
+        responseType: 'blob'
+      })
+      const url = URL.createObjectURL(new Blob([r.data], { type: mime }))
+      const a   = document.createElement('a')
       a.href = url; a.download = `batch_${type}_${selJob.slice(0,8)}.${ext}`; a.click()
       URL.revokeObjectURL(url)
     } catch { message.error(`Download failed — ${type} not available`) }
@@ -830,5 +835,7 @@ export default function BatchJobsPage() {
     </div>
   )
 }
+
+
 
 

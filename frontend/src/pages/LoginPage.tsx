@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Form, Input, Button, Alert, message } from 'antd'
 import {
   UserOutlined, LockOutlined, SafetyOutlined, ArrowRightOutlined,
-  ArrowLeftOutlined,
+  ArrowLeftOutlined, MailOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
 import { authAPI } from '../api/client'
 import { useAuthStore } from '../context/authStore'
@@ -111,36 +111,54 @@ const STATS = [
   { label: 'Products supported', value: '12+' },
 ]
 
+type Step = 'credentials' | 'mfa' | 'forgot' | 'reset_mfa' | 'reset_password' | 'reset_done'
+
 /* ═══════════════════════════════════════════════════════════════ */
 export default function LoginPage() {
-  const [step, setStep] = useState<'credentials' | 'mfa'>('credentials')
+  const [step, setStep] = useState<Step>('credentials')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [otpLoading, setOtpLoading] = useState(false)
+  const [resetToken, setResetToken] = useState('')
+  const [resetMfaRequired, setResetMfaRequired] = useState(false)
+  const [forgotSent, setForgotSent] = useState(false)
   const { setUser, setMFAPending, mfaUsername, mfaSessionToken, clearMFA } = useAuthStore()
   const [form] = Form.useForm()
+  const [forgotForm] = Form.useForm()
+  const [resetForm] = Form.useForm()
 
   useEffect(() => { setError('') }, [step])
+
+  // Read token from URL on mount (for email link clicks)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token  = params.get('token')
+    const mfa    = params.get('mfa')
+    if (token) {
+      setResetToken(token)
+      setResetMfaRequired(mfa === 'required')
+      setStep(mfa === 'required' ? 'reset_mfa' : 'reset_password')
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   /* ── Step 1: username + password ── */
   const handleLogin = async (values: { username: string; password: string }) => {
     setLoading(true); setError('')
     try {
-      const res = await authAPI.login(values.username, values.password)
+      const res  = await authAPI.login(values.username, values.password)
       const data = res.data
-
       if (data.mfa_required) {
         setMFAPending(values.username, data.mfa_session_token)
         setStep('mfa')
         return
       }
-
-      // No MFA — token comes back directly
       const user: AuthUser = {
-        username: data.username ?? values.username,
-        role: data.role ?? 'underwriter',
-        token: data.access_token,
-        tenant_id: data.tenant_id ?? '',
+        username:    data.username ?? values.username,
+        role:        data.role ?? 'underwriter',
+        token:       data.access_token,
+        tenant_id:   data.tenant_id ?? '',
         tenant_name: data.tenant_name ?? '',
       }
       setUser(user)
@@ -152,17 +170,17 @@ export default function LoginPage() {
     }
   }
 
-  /* ── Step 2: TOTP verify ── */
+  /* ── Step 2: TOTP verify (login) ── */
   const handleOTP = async (code: string) => {
     setOtpLoading(true); setError('')
     try {
-      const res = await authAPI.verifyMFA(code, mfaUsername, mfaSessionToken)
+      const res  = await authAPI.verifyMFA(code, mfaUsername, mfaSessionToken)
       const data = res.data
       const user: AuthUser = {
-        username: data.username ?? mfaUsername,
-        role: data.role ?? 'underwriter',
-        token: data.access_token,
-        tenant_id: data.tenant_id ?? '',
+        username:    data.username ?? mfaUsername,
+        role:        data.role ?? 'underwriter',
+        token:       data.access_token,
+        tenant_id:   data.tenant_id ?? '',
         tenant_name: data.tenant_name ?? '',
       }
       setUser(user)
@@ -172,6 +190,329 @@ export default function LoginPage() {
     } finally {
       setOtpLoading(false)
     }
+  }
+
+  /* ── Forgot password: send email ── */
+  const handleForgot = async (values: { identifier: string }) => {
+    setLoading(true); setError('')
+    try {
+      await authAPI.post('/auth/forgot-password', { identifier: values.identifier })
+      setForgotSent(true)
+    } catch {
+      // Always show success to avoid user enumeration
+      setForgotSent(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  /* ── Reset MFA verify (before new password) ── */
+  const handleResetMFA = async (code: string) => {
+    setOtpLoading(true); setError('')
+    try {
+      await authAPI.post('/auth/verify-reset-mfa', { token: resetToken, totp_code: code })
+      setStep('reset_password')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setError(err.response?.data?.detail ?? 'Invalid code. Please try again.')
+    } finally {
+      setOtpLoading(false)
+    }
+  }
+
+  /* ── Set new password ── */
+  const handleResetPassword = async (values: { new_password: string; confirm_password: string }) => {
+    if (values.new_password !== values.confirm_password) {
+      setError('Passwords do not match'); return
+    }
+    setLoading(true); setError('')
+    try {
+      await authAPI.post('/auth/reset-password-confirm', {
+        token: resetToken,
+        new_password: values.new_password,
+      })
+      setStep('reset_done')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setError(err.response?.data?.detail ?? 'Reset failed. The link may have expired.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  /* ── shared back button ── */
+  const BackBtn = ({ to, label = 'Back to login' }: { to: Step; label?: string }) => (
+    <button
+      onClick={() => { clearMFA(); setStep(to); setError(''); setForgotSent(false) }}
+      style={{
+        background: 'none', border: 'none', color: 'var(--teal-400)',
+        cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 13, marginBottom: 36, padding: 0,
+      }}
+    >
+      <ArrowLeftOutlined /> {label}
+    </button>
+  )
+
+  /* ── panel content by step ── */
+  const renderStep = () => {
+
+    /* ── credentials ── */
+    if (step === 'credentials') return (
+      <>
+        <div style={{ marginBottom: 40 }}>
+          <h2 style={{
+            fontFamily: 'var(--font-display)', fontWeight: 700,
+            fontSize: 28, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
+          }}>Sign in</h2>
+          <p style={{ color: 'var(--slate-400)', fontSize: 14 }}>
+            Access your underwriting workspace
+          </p>
+        </div>
+
+        {error && (
+          <Alert message={error} type="error" showIcon
+            style={{ marginBottom: 20, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }} />
+        )}
+
+        <Form form={form} onFinish={handleLogin} layout="vertical" requiredMark={false}>
+          <Form.Item name="username" label="Username"
+            rules={[{ required: true, message: 'Username is required' }]}>
+            <Input prefix={<UserOutlined style={{ color: 'var(--slate-500)' }} />}
+              placeholder="your.username" size="large" autoComplete="username" />
+          </Form.Item>
+
+          <Form.Item name="password" label="Password" style={{ marginTop: 16 }}
+            rules={[{ required: true, message: 'Password is required' }]}>
+            <Input.Password prefix={<LockOutlined style={{ color: 'var(--slate-500)' }} />}
+              placeholder="••••••••" size="large" autoComplete="current-password" />
+          </Form.Item>
+
+          {/* Forgot password link */}
+          <div style={{ textAlign: 'right', marginTop: -8, marginBottom: 4 }}>
+            <button type="button"
+              onClick={() => { setStep('forgot'); setError('') }}
+              style={{
+                background: 'none', border: 'none', color: 'var(--teal-400)',
+                cursor: 'pointer', fontSize: 13, padding: 0,
+              }}>
+              Forgot password?
+            </button>
+          </div>
+
+          <Button type="primary" htmlType="submit" loading={loading} size="large" block
+            style={{ marginTop: 20, height: 48, fontSize: 15, fontWeight: 600 }}
+            icon={<ArrowRightOutlined />} iconPosition="end">
+            Continue
+          </Button>
+        </Form>
+
+        <div style={{
+          marginTop: 32, padding: '14px 16px',
+          background: 'rgba(0,212,170,0.05)',
+          border: '1px solid rgba(0,212,170,0.15)',
+          borderRadius: 8, fontSize: 12, color: 'var(--slate-400)',
+        }}>
+          <SafetyOutlined style={{ color: 'var(--teal-500)', marginRight: 8 }} />
+          All sessions are encrypted · TOTP MFA enforced for privileged roles
+        </div>
+      </>
+    )
+
+    /* ── login MFA ── */
+    if (step === 'mfa') return (
+      <>
+        <BackBtn to="credentials" />
+        <div style={{ textAlign: 'center', marginBottom: 8 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 64, height: 64,
+            background: 'rgba(0,212,170,0.1)', border: '1.5px solid rgba(0,212,170,0.3)',
+            borderRadius: '50%', marginBottom: 20,
+          }}>
+            <SafetyOutlined style={{ fontSize: 26, color: 'var(--teal-400)' }} />
+          </div>
+          <h2 style={{
+            fontFamily: 'var(--font-display)', fontWeight: 700,
+            fontSize: 26, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
+          }}>Two-factor verification</h2>
+          <p style={{ color: 'var(--slate-400)', fontSize: 14, lineHeight: 1.6 }}>
+            Enter the 6-digit code from your authenticator app
+          </p>
+          <p style={{ marginTop: 8, fontFamily: 'var(--font-mono)', color: 'var(--teal-500)', fontSize: 13 }}>
+            {mfaUsername}
+          </p>
+        </div>
+        {error && <Alert message={error} type="error" showIcon
+          style={{ marginBottom: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }} />}
+        <OTPInput onComplete={handleOTP} />
+        {otpLoading && <div style={{ textAlign: 'center', color: 'var(--teal-400)', fontSize: 13 }}>Verifying…</div>}
+        <p style={{ textAlign: 'center', marginTop: 24, fontSize: 12, color: 'var(--slate-500)' }}>
+          Open Google Authenticator or Authy · codes refresh every 30s
+        </p>
+      </>
+    )
+
+    /* ── forgot password ── */
+    if (step === 'forgot') return (
+      <>
+        <BackBtn to="credentials" />
+        <div style={{ marginBottom: 32 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 56, height: 56, background: 'rgba(0,212,170,0.1)',
+            border: '1.5px solid rgba(0,212,170,0.3)', borderRadius: '50%', marginBottom: 20,
+          }}>
+            <MailOutlined style={{ fontSize: 22, color: 'var(--teal-400)' }} />
+          </div>
+          <h2 style={{
+            fontFamily: 'var(--font-display)', fontWeight: 700,
+            fontSize: 26, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
+          }}>Reset your password</h2>
+          <p style={{ color: 'var(--slate-400)', fontSize: 14, lineHeight: 1.6 }}>
+            Enter your username or email address and we'll send you a reset link.
+          </p>
+        </div>
+
+        {forgotSent ? (
+          <div style={{
+            background: 'rgba(0,212,170,0.06)', border: '1px solid rgba(0,212,170,0.2)',
+            borderRadius: 10, padding: '20px 24px', textAlign: 'center',
+          }}>
+            <CheckCircleOutlined style={{ fontSize: 32, color: 'var(--teal-400)', marginBottom: 12 }} />
+            <p style={{ color: '#e2e8f0', fontSize: 14, lineHeight: 1.7, margin: 0 }}>
+              If an account exists for that username or email, a reset link has been sent.<br />
+              <span style={{ color: 'var(--slate-400)', fontSize: 12 }}>Check your inbox — link expires in 30 minutes.</span>
+            </p>
+            <button type="button" onClick={() => { setStep('credentials'); setForgotSent(false) }}
+              style={{
+                marginTop: 20, background: 'none', border: 'none',
+                color: 'var(--teal-400)', cursor: 'pointer', fontSize: 13,
+              }}>
+              ← Back to login
+            </button>
+          </div>
+        ) : (
+          <>
+            {error && <Alert message={error} type="error" showIcon style={{ marginBottom: 16 }} />}
+            <Form form={forgotForm} onFinish={handleForgot} layout="vertical" requiredMark={false}>
+              <Form.Item name="identifier" label="Username or Email"
+                rules={[{ required: true, message: 'Please enter your username or email' }]}>
+                <Input prefix={<UserOutlined style={{ color: 'var(--slate-500)' }} />}
+                  placeholder="your.username or email@company.com" size="large" autoComplete="username" />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" loading={loading} size="large" block
+                style={{ marginTop: 24, height: 48, fontSize: 15, fontWeight: 600 }}
+                icon={<MailOutlined />}>
+                Send Reset Link
+              </Button>
+            </Form>
+          </>
+        )}
+      </>
+    )
+
+    /* ── reset MFA verify ── */
+    if (step === 'reset_mfa') return (
+      <>
+        <div style={{ textAlign: 'center', marginBottom: 8 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 64, height: 64, background: 'rgba(0,212,170,0.1)',
+            border: '1.5px solid rgba(0,212,170,0.3)', borderRadius: '50%', marginBottom: 20,
+          }}>
+            <SafetyOutlined style={{ fontSize: 26, color: 'var(--teal-400)' }} />
+          </div>
+          <h2 style={{
+            fontFamily: 'var(--font-display)', fontWeight: 700,
+            fontSize: 24, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
+          }}>Verify your identity</h2>
+          <p style={{ color: 'var(--slate-400)', fontSize: 14, lineHeight: 1.6 }}>
+            Your account has MFA enabled.<br />
+            Enter your authenticator code to continue with the password reset.
+          </p>
+        </div>
+        {error && <Alert message={error} type="error" showIcon
+          style={{ marginBottom: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }} />}
+        <OTPInput onComplete={handleResetMFA} />
+        {otpLoading && <div style={{ textAlign: 'center', color: 'var(--teal-400)', fontSize: 13 }}>Verifying…</div>}
+        <p style={{ textAlign: 'center', marginTop: 16, fontSize: 12, color: 'var(--slate-500)' }}>
+          Open Google Authenticator or Authy · codes refresh every 30s
+        </p>
+      </>
+    )
+
+    /* ── set new password ── */
+    if (step === 'reset_password') return (
+      <>
+        <div style={{ marginBottom: 32 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 56, height: 56, background: 'rgba(0,212,170,0.1)',
+            border: '1.5px solid rgba(0,212,170,0.3)', borderRadius: '50%', marginBottom: 20,
+          }}>
+            <LockOutlined style={{ fontSize: 22, color: 'var(--teal-400)' }} />
+          </div>
+          <h2 style={{
+            fontFamily: 'var(--font-display)', fontWeight: 700,
+            fontSize: 26, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
+          }}>Set new password</h2>
+          <p style={{ color: 'var(--slate-400)', fontSize: 14 }}>
+            Choose a strong password of at least 8 characters.
+          </p>
+        </div>
+        {error && <Alert message={error} type="error" showIcon style={{ marginBottom: 16 }} />}
+        <Form form={resetForm} onFinish={handleResetPassword} layout="vertical" requiredMark={false}>
+          <Form.Item name="new_password" label="New Password"
+            rules={[
+              { required: true, message: 'Password is required' },
+              { min: 8, message: 'At least 8 characters' },
+            ]}>
+            <Input.Password prefix={<LockOutlined style={{ color: 'var(--slate-500)' }} />}
+              placeholder="New password" size="large" autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item name="confirm_password" label="Confirm Password" style={{ marginTop: 16 }}
+            rules={[{ required: true, message: 'Please confirm your password' }]}>
+            <Input.Password prefix={<LockOutlined style={{ color: 'var(--slate-500)' }} />}
+              placeholder="Repeat new password" size="large" autoComplete="new-password" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={loading} size="large" block
+            style={{ marginTop: 24, height: 48, fontSize: 15, fontWeight: 600 }}
+            icon={<ArrowRightOutlined />} iconPosition="end">
+            Reset Password
+          </Button>
+        </Form>
+      </>
+    )
+
+    /* ── success ── */
+    if (step === 'reset_done') return (
+      <div style={{ textAlign: 'center' }}>
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 72, height: 72, background: 'rgba(0,212,170,0.1)',
+          border: '1.5px solid rgba(0,212,170,0.3)', borderRadius: '50%', marginBottom: 24,
+        }}>
+          <CheckCircleOutlined style={{ fontSize: 34, color: 'var(--teal-400)' }} />
+        </div>
+        <h2 style={{
+          fontFamily: 'var(--font-display)', fontWeight: 700,
+          fontSize: 26, color: '#fff', letterSpacing: '-0.02em', marginBottom: 12,
+        }}>Password updated!</h2>
+        <p style={{ color: 'var(--slate-400)', fontSize: 14, lineHeight: 1.7, marginBottom: 32 }}>
+          Your password has been reset successfully.<br />
+          You can now sign in with your new password.
+        </p>
+        <Button type="primary" size="large" block
+          style={{ height: 48, fontSize: 15, fontWeight: 600 }}
+          icon={<ArrowRightOutlined />} iconPosition="end"
+          onClick={() => { setStep('credentials'); setResetToken('') }}>
+          Go to Sign In
+        </Button>
+      </div>
+    )
+
+    return null
   }
 
   return (
@@ -187,17 +528,13 @@ export default function LoginPage() {
         padding: '52px 60px',
       }}>
         <GridBg />
-
-        {/* Teal glow blob */}
         <div style={{
-          position: 'absolute', width: 480, height: 480,
-          borderRadius: '50%',
+          position: 'absolute', width: 480, height: 480, borderRadius: '50%',
           background: 'radial-gradient(circle, rgba(0,212,170,0.14) 0%, transparent 70%)',
           top: '15%', left: '-10%', pointerEvents: 'none',
         }} />
         <div style={{
-          position: 'absolute', width: 320, height: 320,
-          borderRadius: '50%',
+          position: 'absolute', width: 320, height: 320, borderRadius: '50%',
           background: 'radial-gradient(circle, rgba(0,212,170,0.08) 0%, transparent 70%)',
           bottom: '10%', right: '5%', pointerEvents: 'none',
         }} />
@@ -216,23 +553,17 @@ export default function LoginPage() {
               </div>
             </div>
           </div>
-
           <h1 style={{
             fontFamily: 'var(--font-display)', fontWeight: 700,
             fontSize: 40, lineHeight: 1.15, color: '#fff',
             letterSpacing: '-0.03em', maxWidth: 420,
           }}>
             Decisions at the
-            <span style={{
-              display: 'block', color: 'var(--teal-500)',
-              WebkitTextStroke: '0px',
-            }}>speed of data.</span>
+            <span style={{ display: 'block', color: 'var(--teal-500)', WebkitTextStroke: '0px' }}>
+              speed of data.
+            </span>
           </h1>
-
-          <p style={{
-            marginTop: 20, color: 'var(--slate-400)',
-            fontSize: 15, lineHeight: 1.7, maxWidth: 400,
-          }}>
+          <p style={{ marginTop: 20, color: 'var(--slate-400)', fontSize: 15, lineHeight: 1.7, maxWidth: 400 }}>
             Enterprise underwriting automation for Indian insurance carriers —
             life, health, motor, and reinsurance in a single platform.
           </p>
@@ -245,27 +576,21 @@ export default function LoginPage() {
         }}>
           {STATS.map((s) => (
             <div key={s.label} style={{
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 12, padding: '18px 20px',
-              backdropFilter: 'blur(8px)',
+              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: 12, padding: '18px 20px', backdropFilter: 'blur(8px)',
             }}>
               <div style={{
                 fontFamily: 'var(--font-mono)', fontWeight: 600,
                 fontSize: 22, color: 'var(--teal-400)', lineHeight: 1,
               }}>{s.value}</div>
-              <div style={{ fontSize: 12, color: 'var(--slate-400)', marginTop: 6 }}>
-                {s.label}
-              </div>
+              <div style={{ fontSize: 12, color: 'var(--slate-400)', marginTop: 6 }}>{s.label}</div>
             </div>
           ))}
         </div>
 
-        {/* Bottom bar */}
         <div style={{
           position: 'relative', zIndex: 1,
-          fontSize: 11, color: 'var(--slate-600)',
-          letterSpacing: '0.04em', marginTop: 32,
+          fontSize: 11, color: 'var(--slate-600)', letterSpacing: '0.04em', marginTop: 32,
         }}>
           © 2025 RiskUW · riskuw.online · Secure · IRDAI-aligned
         </div>
@@ -274,145 +599,14 @@ export default function LoginPage() {
       {/* ── Right panel ── */}
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'var(--navy-900)',
-        padding: '48px 40px',
+        background: 'var(--navy-900)', padding: '48px 40px',
       }}>
         <div style={{ width: '100%', maxWidth: 400 }}>
-          {step === 'credentials' ? (
-            <>
-              <div style={{ marginBottom: 40 }}>
-                <h2 style={{
-                  fontFamily: 'var(--font-display)', fontWeight: 700,
-                  fontSize: 28, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
-                }}>Sign in</h2>
-                <p style={{ color: 'var(--slate-400)', fontSize: 14 }}>
-                  Access your underwriting workspace
-                </p>
-              </div>
-
-              {error && (
-                <Alert
-                  message={error} type="error" showIcon
-                  style={{ marginBottom: 20, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}
-                />
-              )}
-
-              <Form form={form} onFinish={handleLogin} layout="vertical" requiredMark={false}>
-                <Form.Item
-                  name="username"
-                  label="Username"
-                  rules={[{ required: true, message: 'Username is required' }]}
-                >
-                  <Input
-                    prefix={<UserOutlined style={{ color: 'var(--slate-500)' }} />}
-                    placeholder="your.username"
-                    size="large"
-                    autoComplete="username"
-                  />
-                </Form.Item>
-
-                <Form.Item
-                  name="password"
-                  label="Password"
-                  style={{ marginTop: 16 }}
-                  rules={[{ required: true, message: 'Password is required' }]}
-                >
-                  <Input.Password
-                    prefix={<LockOutlined style={{ color: 'var(--slate-500)' }} />}
-                    placeholder="••••••••"
-                    size="large"
-                    autoComplete="current-password"
-                  />
-                </Form.Item>
-
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  loading={loading}
-                  size="large"
-                  block
-                  style={{ marginTop: 28, height: 48, fontSize: 15, fontWeight: 600 }}
-                  icon={<ArrowRightOutlined />}
-                  iconPosition="end"
-                >
-                  Continue
-                </Button>
-              </Form>
-
-              <div style={{
-                marginTop: 32, padding: '14px 16px',
-                background: 'rgba(0,212,170,0.05)',
-                border: '1px solid rgba(0,212,170,0.15)',
-                borderRadius: 8, fontSize: 12, color: 'var(--slate-400)',
-              }}>
-                <SafetyOutlined style={{ color: 'var(--teal-500)', marginRight: 8 }} />
-                All sessions are encrypted · TOTP MFA enforced for privileged roles
-              </div>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => { clearMFA(); setStep('credentials') }}
-                style={{
-                  background: 'none', border: 'none', color: 'var(--teal-400)',
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
-                  fontSize: 13, marginBottom: 36, padding: 0,
-                }}
-              >
-                <ArrowLeftOutlined /> Back to login
-              </button>
-
-              <div style={{ textAlign: 'center', marginBottom: 8 }}>
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: 64, height: 64,
-                  background: 'rgba(0,212,170,0.1)',
-                  border: '1.5px solid rgba(0,212,170,0.3)',
-                  borderRadius: '50%', marginBottom: 20,
-                }}>
-                  <SafetyOutlined style={{ fontSize: 26, color: 'var(--teal-400)' }} />
-                </div>
-
-                <h2 style={{
-                  fontFamily: 'var(--font-display)', fontWeight: 700,
-                  fontSize: 26, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
-                }}>Two-factor verification</h2>
-                <p style={{ color: 'var(--slate-400)', fontSize: 14, lineHeight: 1.6 }}>
-                  Enter the 6-digit code from your authenticator app
-                </p>
-                <p style={{
-                  marginTop: 8, fontFamily: 'var(--font-mono)',
-                  color: 'var(--teal-500)', fontSize: 13,
-                }}>
-                  {mfaUsername}
-                </p>
-              </div>
-
-              {error && (
-                <Alert
-                  message={error} type="error" showIcon
-                  style={{ marginBottom: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}
-                />
-              )}
-
-              <OTPInput onComplete={handleOTP} />
-
-              {otpLoading && (
-                <div style={{ textAlign: 'center', color: 'var(--teal-400)', fontSize: 13 }}>
-                  Verifying…
-                </div>
-              )}
-
-              <p style={{
-                textAlign: 'center', marginTop: 24,
-                fontSize: 12, color: 'var(--slate-500)',
-              }}>
-                Open Google Authenticator or Authy · codes refresh every 30s
-              </p>
-            </>
-          )}
+          {renderStep()}
         </div>
       </div>
     </div>
   )
 }
+
+

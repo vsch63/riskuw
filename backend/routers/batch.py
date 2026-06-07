@@ -98,8 +98,9 @@ def download_template(
 
     buf.seek(0)
     filename = f"riskuw_batch_template_{product_code}.csv"
+    bom_buf = io.StringIO('\ufeff' + buf.getvalue())
     return StreamingResponse(
-        buf,
+        bom_buf,
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
@@ -107,7 +108,7 @@ def download_template(
 
 # ── Batch Jobs CRUD ───────────────────────────────────────────────────────────
 import io, uuid, csv
-from fastapi import UploadFile, File, Form, BackgroundTasks
+from fastapi import UploadFile, File, Form, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 import psycopg2.extras
 
@@ -131,13 +132,14 @@ async def upload_batch(
     background_tasks: BackgroundTasks,
     current: CurrentUser,
     file: UploadFile = File(...),
-    job_name: str = Form(""),
-    dry_run: bool = Form(False),
-    skip_product_errors: bool = Form(False),
-    policy_effective_date: str = Form(""),
-    policy_expire_date: str = Form(""),
-    auto_assign: bool = Form(False),
-    sla_hours: int = Form(48),
+    job_name: str = Query(""),
+    dry_run: bool = Query(False),
+    skip_product_errors: bool = Query(False),
+    policy_effective_date: str = Query(""),
+    policy_expire_date: str = Query(""),
+    auto_assign: bool = Query(False),
+    sla_hours: int = Query(48),
+    ai_engine: str = Query("rules_only"),
 ):
     file_bytes = await file.read()
     filename   = file.filename or "batch.csv"
@@ -190,7 +192,7 @@ async def upload_batch(
         background_tasks.add_task(
             _run_batch_job, job_id, file_bytes, filename, dry_run,
             skip_product_errors, policy_effective_date, policy_expire_date,
-            current.username
+            current.username, ai_engine
         )
 
         return {
@@ -205,16 +207,19 @@ async def upload_batch(
 
 
 def _run_batch_job(job_id, file_bytes, filename, dry_run,
-                   skip_product_errors, eff_date, exp_date, username):
+                   skip_product_errors, eff_date, exp_date, username,
+                   ai_engine="rules_only"):
     """Background task to process batch job."""
+    import logging as _logging
+    _logger = _logging.getLogger("uw_platform")
     try:
-        from services.batch_processor import process_job
-        process_job(job_id)
-    except ImportError:
+        from services.batch_processor import process_batch_job
+        process_batch_job(job_id, file_bytes, filename, username, username, ai_engine=ai_engine)
+    except (ImportError, TypeError):
         _fallback_process(job_id, file_bytes, filename, dry_run,
-                         skip_product_errors, username)
+                         skip_product_errors, username, ai_engine)
     except Exception as e:
-        logger.error(f"Batch job {job_id} failed: {e}", exc_info=True)
+        _logger.error(f"Batch job {job_id} failed: {e}", exc_info=True)
         conn, release = _jobs_db()
         try:
             cur = conn.cursor()
@@ -389,9 +394,11 @@ def _get_active_user_labels(cur) -> list[dict]:
 
 
 def _fallback_process(job_id, file_bytes, filename, dry_run,
-                      skip_product_errors, username):
+                      skip_product_errors, username, ai_engine="rules_only"):
     """Fallback batch processor if service not available."""
     import csv, io as _io, json
+    import logging as _logging
+    _logger = _logging.getLogger("uw_platform")
     from services.uw_engine import run_evaluation
 
     conn, release = _jobs_db()
@@ -413,6 +420,10 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
 
         approved = declined = referred = errored = 0
 
+        # Delete existing records so re-runs get fresh AI data
+        cur.execute("DELETE FROM batch_job_records WHERE job_id = %s", (job_id,))
+        conn.commit()
+
         for i, row in enumerate(rows, 1):
             try:
                 payload = {k.strip().lower(): v.strip() for k,v in row.items() if v is not None}
@@ -431,7 +442,6 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                              status, outcome, risk_class, net_debit_points,
                              primary_reason, error_codes, processing_ms, created_at)
                         VALUES (%s,%s,%s,%s,'ERROR','ERROR','',0,%s,%s,0,now())
-                        ON CONFLICT DO NOTHING
                     """, (
                         job_id, i,
                         payload.get("applicant_ref", ""),
@@ -471,12 +481,36 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                     outcome = "DRY_RUN"
 
                 # ── Requirement 2: Premium calculation for APPROVED ───────────
+                # Skip premium and AI for dry run — validation only
                 premium      = None
-                premium_note = ""
+                premium_note = "DRY RUN — premium not calculated" if dry_run else ""
                 if not dry_run and "APPROVED" in outcome:
                     prem_result  = _calculate_premium(cur, product_code, payload, result)
                     premium      = prem_result["premium"]
                     premium_note = prem_result["premium_note"]
+
+                # ── AI Scoring (if engine selected) ──────────────────────────
+                ai_decision  = None
+                ai_risk_tier = None
+                ai_risk_score = None
+                ai_narrative = None
+                if not dry_run and ai_engine and ai_engine != "rules_only":
+                    try:
+                        from services.ai_score import get_ai_score
+                        ai_payload = {
+                            **payload,
+                            "uw_outcome":      outcome,
+                            "net_debit_points": result.get("net_debit_points", 0),
+                            "engine":           ai_engine,
+                        }
+                        ai_result    = get_ai_score(ai_payload, engine=ai_engine, conn=conn)
+                        if not ai_result.get("error"):
+                            ai_decision   = ai_result.get("recommendation")
+                            ai_risk_tier  = ai_result.get("risk_tier")
+                            ai_risk_score = ai_result.get("risk_score")
+                            ai_narrative  = ai_result.get("narrative")
+                    except Exception as ai_err:
+                        _logger.warning(f"AI scoring failed for row {i}: {ai_err}")
 
                 if "APPROVED" in outcome:   approved += 1
                 elif "DECLINED" in outcome: declined += 1
@@ -495,22 +529,27 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                          status, outcome, risk_class, net_debit_points,
                          primary_reason, error_codes,
                          premium, premium_note, input_data,
+                         ai_engine, ai_decision, ai_risk_tier, ai_risk_score, ai_narrative,
                          processing_ms, created_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,now())
-                    ON CONFLICT DO NOTHING
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,now())
                 """, (
                     job_id, i,
                     payload.get("applicant_ref",""),
                     product_code,
-                    "PROCESSED" if not dry_run else "DRY_RUN",
-                    outcome,
-                    result.get("risk_class","") if not dry_run else "",
-                    result.get("net_debit_points",0) if not dry_run else 0,
-                    result.get("primary_reason","") if not dry_run else "",
-                    ",".join(result.get("error_codes",[]) or []) if not dry_run else "",
-                    premium,
+                    "DRY_RUN" if dry_run else "PROCESSED",
+                    outcome,                                    # stores DRY_RUN_APPROVED etc.
+                    result.get("risk_class",""),                # show predicted risk class
+                    result.get("net_debit_points",0),           # show predicted debit points
+                    result.get("primary_reason",""),            # show predicted reason
+                    ",".join(result.get("error_codes",[]) or []),
+                    None if dry_run else premium,               # no premium for dry run
                     premium_note,
                     input_data_json,
+                    None if dry_run else (ai_engine if ai_engine != "rules_only" else None),
+                    None if dry_run else ai_decision,           # no AI for dry run
+                    None if dry_run else ai_risk_tier,
+                    None if dry_run else ai_risk_score,
+                    None if dry_run else ai_narrative,
                 ))
                 if i % 50 == 0:
                     conn.commit()
@@ -524,7 +563,7 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
 
             except Exception as row_err:
                 errored += 1
-                logger.warning(f"Row {i} error: {row_err}")
+                _logger.warning(f"Row {i} error: {row_err}")
 
         conn.commit()
         cur.execute("""
@@ -540,7 +579,12 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
         conn.commit()
         cur.close()
     except Exception as e:
-        logger.error(f"Fallback batch failed: {e}", exc_info=True)
+        import traceback
+        err_msg = f"Fallback batch failed: {e}\n{traceback.format_exc()}"
+        try:
+            _logger.error(err_msg)
+        except:
+            print(err_msg)
         try:
             cur.execute("""
                 UPDATE batch_jobs SET status='FAILED', error_message=%s,
@@ -631,12 +675,14 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
     try:
         cur = conn.cursor()
 
-        # ── Fetch records including premium and input_data ────────────────────
+        # ── Fetch records including premium, input_data and AI columns ──────────
         cur.execute("""
             SELECT r.row_number, r.applicant_ref, r.product_code,
                    r.status, r.outcome, r.risk_class, r.net_debit_points,
                    r.primary_reason, r.error_codes, r.processing_ms,
-                   r.premium, r.premium_note, r.input_data
+                   r.premium, r.premium_note, r.input_data,
+                   r.ai_engine, r.ai_decision, r.ai_risk_tier,
+                   r.ai_risk_score, r.ai_narrative
             FROM batch_job_records r
             WHERE r.job_id = %s
             ORDER BY r.row_number
@@ -667,7 +713,7 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
         if type == "errors":
             rows = [r for r in rows if (
                 r.get("status") == "ERROR"
-                or r.get("outcome") in (None, "", "ERROR")
+                or r.get("outcome") in (None, "", "ERROR", "PRODUCT_NOT_FOUND")
                 or r.get("error_codes") not in (None, "")
             )]
         elif type == "summary":
@@ -693,7 +739,7 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
                 for row in summary_rows:
                     writer.writerow([row.get(c, "") for c in export_cols])
                 output.seek(0)
-                return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+                return StreamingResponse(iter(['\ufeff' + output.getvalue()]), media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=batch_summary_{job_id[:8]}.csv"})
 
         # ── Build export columns for results / errors ─────────────────────────
@@ -702,6 +748,7 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
             "outcome", "risk_class", "net_debit_points",
             "primary_reason", "error_codes",
             "premium", "premium_note",
+            "ai_engine", "ai_decision", "ai_risk_tier", "ai_risk_score", "ai_narrative",
         ]
         # Add one column per active user label
         ul_cols = [f"ul_{ul['label_key']}" for ul in user_labels]
@@ -714,6 +761,7 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
             "Outcome", "Risk Class", "Net Debit Points",
             "Primary Reason", "Error Codes",
             "Premium (₹)", "Premium Note",
+            "AI Engine", "AI Decision", "AI Risk Tier", "AI Risk Score", "AI Narrative",
         ] + ul_headers
 
         # ── Render xlsx or csv ────────────────────────────────────────────────
@@ -768,7 +816,7 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
                     for c in export_cols
                 ])
             output.seek(0)
-            return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+            return StreamingResponse(iter(['\ufeff' + output.getvalue()]), media_type="text/csv",
                 headers={"Content-Disposition": f"attachment; filename=batch_{type}_{job_id[:8]}.csv"})
     finally:
         release(conn)

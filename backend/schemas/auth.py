@@ -7,26 +7,24 @@ from __future__ import annotations
 from pydantic import BaseModel, EmailStr, field_validator
 import re
 
-
 class LoginRequest(BaseModel):
     username: str
     password: str
-
 
 class MFAVerifyRequest(BaseModel):
     totp_code: str
     username: str
     session_token: str | None = None
 
-
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     username: str
     role: str
+    tenant_id: str | None = None       # ← added
+    tenant_name: str | None = None     # ← added
     mfa_required: bool = False
     mfa_session_token: str | None = None
-
 
 class UserCreate(BaseModel):
     username: str
@@ -34,7 +32,7 @@ class UserCreate(BaseModel):
     password: str
     full_name: str | None = None
     role: str = "viewer"
-    tenant_id: str
+    tenant_id: str | None = None       # ← changed from str to optional
 
     @field_validator("role")
     @classmethod
@@ -54,7 +52,6 @@ class UserCreate(BaseModel):
             raise ValueError("password must be at least 8 characters")
         return v
 
-
 class UserOut(BaseModel):
     username: str
     email: str
@@ -62,9 +59,7 @@ class UserOut(BaseModel):
     role: str
     is_active: bool
     tenant_id: str
-
     model_config = {"from_attributes": True}
-
 
 class PasswordChange(BaseModel):
     current_password: str
@@ -76,7 +71,6 @@ class PasswordChange(BaseModel):
         if len(v) < 8:
             raise ValueError("password must be at least 8 characters")
         return v
-
 
 class PasswordReset(BaseModel):
     """Admin-initiated reset — no current password needed."""

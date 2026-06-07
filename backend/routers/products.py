@@ -231,20 +231,92 @@ def create_product(body: ProductCreate, current: CurrentUser):
         release(conn)
 
 
+@router.get("/{code}/formula-labels")
+def get_product_formula_labels(code: str, current: CurrentUser):
+    """Return user label fields required by this product's active premium formula."""
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT s.user_label AS label_key,
+                   COALESCE(ul.label_name, s.user_label) AS label_name,
+                   COALESCE(ul.data_type, 'NUMBER') AS data_type,
+                   COALESCE(ul.default_value, s.user_value::text) AS default_value,
+                   ul.prefix, ul.suffix,
+                   COALESCE(ul.description, s.description) AS description
+            FROM premium_formula_step s
+            JOIN premium_formula f ON f.id = s.formula_id
+            LEFT JOIN system_user_label ul ON ul.label_key = s.user_label
+            WHERE f.product_code = %s
+              AND f.formula_type = 'BASE_PREMIUM'
+              AND f.is_active = true
+              AND f.effective_date <= CURRENT_DATE
+              AND (f.expiry_date IS NULL OR f.expiry_date >= CURRENT_DATE)
+              AND s.parameter_type = 'USER_LABEL'
+              AND s.user_label IS NOT NULL
+            ORDER BY s.user_label
+            """,
+            (code.upper(),),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        return rows
+    finally:
+        release(conn)
+
+
 @router.patch("/{code}")
 def update_product(code: str, body: ProductUpdate, current: CurrentUser):
     if current.role not in ("admin", "super_admin"):
         raise HTTPException(403, "Admins only")
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    # Include fields that are explicitly set — including empty strings for dates (to clear them)
+    raw = body.model_dump()
+    # Filter: skip None values, skip booleans stored in string fields (frontend sends false for unset selects)
+    STRING_FIELDS = {"exam_required", "product_type", "category", "uw_method",
+                     "description", "uw_notes", "effective_date", "expire_date",
+                     "product_name"}
+    BOOL_FIELDS = {"is_guaranteed_issue", "is_group_product", "is_active"}
+    updates = {}
+    for k, v in raw.items():
+        # Always include boolean fields even if False
+        if k in BOOL_FIELDS:
+            if v is not None:
+                updates[k] = bool(v)
+            continue
+        if v is None:
+            continue
+        # If a string field receives a non-string (e.g. False from unset Select), skip it
+        if k in STRING_FIELDS and not isinstance(v, str):
+            continue
+        updates[k] = v
     if not updates:
         raise HTTPException(400, "No fields to update")
+
+    # Normalise date fields: empty string → NULL, non-empty → cast to date
+    DATE_FIELDS = {"effective_date", "expire_date"}
+    for df in DATE_FIELDS:
+        if df in raw:  # field was explicitly sent
+            updates[df] = raw[df] if raw[df] else None
+
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        sets = ", ".join(f"{k}=%s" for k in updates)
+        # Build SET clause with explicit ::date cast for date fields
+        set_parts = []
+        values = []
+        for k, v in updates.items():
+            if k in DATE_FIELDS:
+                set_parts.append(f"{k}=%s::date")
+            else:
+                set_parts.append(f"{k}=%s")
+            values.append(v)
+
+        sets = ", ".join(set_parts)
         cur.execute(
             f"UPDATE products SET {sets}, updated_at=now() WHERE product_code=%s RETURNING product_code",
-            (*updates.values(), code.upper())
+            (*values, code.upper())
         )
         row = cur.fetchone()
         conn.commit()
@@ -252,6 +324,11 @@ def update_product(code: str, body: ProductUpdate, current: CurrentUser):
         if not row:
             raise HTTPException(404, f"Product '{code}' not found")
         return {"status": "updated", "product_code": code.upper()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, str(e))
     finally:
         release(conn)
 

@@ -41,7 +41,7 @@ const { TextArea } = Input
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface SysConfig { config_key: string; config_value: string; description?: string }
-interface StateCode { id?: number; country_code: string; state_code: string; state_name?: string; is_active: boolean }
+interface StateCode { id?: number; state_code: string; state_name?: string; is_active: boolean }
 interface LetterTemplate {
   id: string; template_name: string; outcome: string; is_active: boolean; version: number
   header_company_name?: string; header_tagline?: string
@@ -1122,137 +1122,49 @@ function StateCodesTab() {
   const [states, setStates]   = useState<StateCode[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
-  const [country, setCountry] = useState('IN')
-  const [addOpen, setAddOpen] = useState(false)
-  const [saving, setSaving]   = useState(false)
-  const [form] = Form.useForm()
 
   const load = async () => {
     setLoading(true)
-    try {
-      const r = await api.get('/system/states', { params: { all: true } })
-      setStates(Array.isArray(r.data) ? r.data : [])
-    } catch { setStates([]) }
+    try { const r = await sysApi.get('/system/states'); setStates(Array.isArray(r) ? r : []) }
+    catch { setStates([]) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
 
-  const countries = [...new Set(states.map(s => s.country_code))].sort()
-
   const filtered = states.filter(s =>
-    (!country || s.country_code === country) &&
-    (!search ||
-      s.state_code.toLowerCase().includes(search.toLowerCase()) ||
-      (s.state_name||'').toLowerCase().includes(search.toLowerCase()))
+    !search || s.state_code.toLowerCase().includes(search.toLowerCase()) ||
+    (s.state_name||'').toLowerCase().includes(search.toLowerCase())
   )
 
-  const loadPreset = async () => {
-    try {
-      await api.post('/system/states/load-preset', { country_code: country })
-      message.success(`State codes loaded for ${country}`)
-      load()
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
-  }
-
-  const saveAdd = async () => {
-    setSaving(true)
-    try {
-      const vals = form.getFieldsValue()
-      await api.post('/system/states', vals)
-      message.success('State code added')
-      setAddOpen(false); form.resetFields(); load()
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
-    finally { setSaving(false) }
-  }
-
-  const toggleActive = async (row: StateCode) => {
-    try {
-      await api.put(`/system/states/${row.id}`, { ...row, is_active: !row.is_active })
-      load()
-    } catch { message.error('Failed') }
-  }
-
-  const deleteState = async (id?: number) => {
-    if (!id) return
-    try { await api.delete(`/system/states/${id}`); message.success('Deleted'); load() }
-    catch { message.error('Failed') }
-  }
-
   const cols = [
-    { title:'Country', dataIndex:'country_code', width:80 },
-    { title:'Code', dataIndex:'state_code', width:80,
-      render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color:'#00d4aa' }}>{v}</span> },
-    { title:'State / Province', dataIndex:'state_name' },
-    { title:'Active', dataIndex:'is_active', width:80,
-      render:(v:boolean, row:StateCode) =>
-        <Switch size="small" checked={v} onChange={() => toggleActive(row)} /> },
-    { title:'', width:50,
-      render:(_:any, row:StateCode) => (
-        <Popconfirm title="Delete this state code?" onConfirm={() => deleteState(row.id)}>
-          <Button size="small" danger icon={<DeleteOutlined/>} />
-        </Popconfirm>
-      )
-    }
+    { title:'Code',  dataIndex:'state_code',  width:80, render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color:'#00d4aa' }}>{v}</span> },
+    { title:'State Name', dataIndex:'state_name' },
+    { title:'Active',dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'error'}>{v?'Active':'Inactive'}</Tag> },
   ]
 
   return (
     <div>
-      {/* Toolbar */}
-      <div style={{ display:'flex', gap:10, marginBottom:16, alignItems:'center', flexWrap:'wrap' }}>
-        <Select value={country} onChange={setCountry} style={{ width:100 }}>
-          {(countries.length ? countries : ['IN']).map(c =>
-            <Option key={c} value={c}>{c}</Option>)}
-        </Select>
+      <div style={{ display:'flex', gap:10, marginBottom:16, alignItems:'center' }}>
         <Input prefix={<EnvironmentOutlined style={{ color:'#6b7280' }}/>}
-          placeholder="Search state…" value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ maxWidth:220 }} allowClear/>
-        <span style={{ fontSize:13, color:'#6b7280' }}>
-          {filtered.length} / {states.length} codes
-        </span>
-        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
-          <Button onClick={load} icon={<ReloadOutlined/>} loading={loading} />
-          <Button onClick={loadPreset}>📥 Load {country} Preset</Button>
-          <Button type="primary" icon={<PlusOutlined/>}
-            onClick={() => {
-              form.resetFields()
-              form.setFieldsValue({ country_code:'IN', is_active:true })
-              setAddOpen(true)
-            }}>
-            Add Code
-          </Button>
-        </div>
+          placeholder="Search codes…" value={search} onChange={e => setSearch(e.target.value)}
+          style={{ maxWidth:240 }} allowClear/>
+        <span style={{ fontSize:13, color:'#6b7280' }}>{filtered.length} of {states.length} state codes</span>
+        <Button icon={<ReloadOutlined/>} onClick={load} loading={loading} style={{ marginLeft:'auto' }}/>
       </div>
-
       {loading
         ? <Spin/>
-        : <Table dataSource={filtered} columns={cols} rowKey="id" size="small"
-            pagination={{ pageSize:25, showSizeChanger:false }} scroll={{ y:400 }}/>
+        : states.length === 0
+          ? (
+            <div style={{ color:'#6b7280', padding:'24px 0', fontSize:13 }}>
+              No state codes found. Run <code style={{ background:'rgba(255,255,255,0.06)', padding:'2px 8px', borderRadius:4, fontFamily:'var(--font-mono, monospace)' }}>
+                python scripts/admin/create_tenant.py --demo
+              </code> to seed them.
+            </div>
+          ) : (
+            <Table dataSource={filtered} columns={cols} rowKey="state_code" size="small"
+              pagination={{ pageSize:25, showSizeChanger:false }} scroll={{ y:400 }}/>
+          )
       }
-
-      <Modal title="Add State Code" open={addOpen}
-        onOk={saveAdd} onCancel={() => setAddOpen(false)}
-        okText="Add" confirmLoading={saving}>
-        <Form form={form} layout="vertical" style={{ marginTop:12 }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-            <Form.Item name="country_code" label="Country Code"
-              rules={[{required:true}]}>
-              <Input placeholder="IN" maxLength={2} />
-            </Form.Item>
-            <Form.Item name="state_code" label="State Code"
-              rules={[{required:true}]}>
-              <Input placeholder="MH" maxLength={3} />
-            </Form.Item>
-          </div>
-          <Form.Item name="state_name" label="State / Province Name"
-            rules={[{required:true}]}>
-            <Input placeholder="Maharashtra" />
-          </Form.Item>
-          <Form.Item name="is_active" label="Active" valuePropName="checked">
-            <Switch defaultChecked />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }

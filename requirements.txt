@@ -47,3 +47,11 @@ Pillow==10.4.0
 pytest==8.3.4
 pytest-asyncio==0.24.0
 httpx==0.28.0                   # TestClient
+
+# ── AI / ML engines ───────────────────────────────────────────────────────────
+xgboost==2.1.3
+scikit-learn==1.5.2
+anthropic==0.40.0
+pdfplumber>=0.11.9
+pymupdf>=1.27.2
+anthropic>=0.40.0

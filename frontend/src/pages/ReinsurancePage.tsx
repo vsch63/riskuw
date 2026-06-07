@@ -9,6 +9,21 @@ import {
 } from '@ant-design/icons'
 import { api } from '../api/client'
 
+// Direct fetch helper for /reinsurance/* routes
+const _tok = () => localStorage.getItem('riskuw_token') || ''
+const riApi = {
+  get: (path: string) =>
+    fetch(path, { headers: { Authorization: `Bearer ${_tok()}` } }).then(r => r.json()),
+  post: (path: string, body?: any) =>
+    fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${_tok()}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+  put: (path: string, body?: any) =>
+    fetch(path, { method: 'PUT', headers: { Authorization: `Bearer ${_tok()}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+  patch: (path: string, body?: any) =>
+    fetch(path, { method: 'PATCH', headers: { Authorization: `Bearer ${_tok()}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+  delete: (path: string) =>
+    fetch(path, { method: 'DELETE', headers: { Authorization: `Bearer ${_tok()}` } }).then(r => r.json()),
+}
+
 const { Option } = Select
 const { TextArea } = Input
 
@@ -118,7 +133,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
     if (!submitModal || !riSel) { message.warning('Select a reinsurer'); return }
     setSub(true)
     try {
-      await api.post('/reinsurance/cessions', {
+      await riApi.post('/reinsurance/cessions', {
         case_id: submitModal.case_id,
         reinsurer_id: riSel, cession_type: riType,
         gross_face_amount: submitModal.face_amount,
@@ -139,7 +154,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
     if (!decModal?.cession_id) return
     setSavingDec(true)
     try {
-      await api.patch(`/reinsurance/cessions/${decModal.cession_id}`, {
+      await riApi.patch(`/reinsurance/cessions/${decModal.cession_id}`, {
         ri_decision: decDecision, ri_reference: decRef,
         ri_modified_terms: decMod || null,
         ri_decision_date: decDate,
@@ -154,7 +169,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
   const markSubmitted = async (c: RICase) => {
     if (!c.cession_id) return
     try {
-      await api.patch(`/reinsurance/cessions/${c.cession_id}`, { status: 'SUBMITTED' })
+      await riApi.patch(`/reinsurance/cessions/${c.cession_id}`, { status: 'SUBMITTED' })
       message.success('Marked as submitted'); onRefresh()
     } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
   }
@@ -453,7 +468,7 @@ function GenerateSlipTab({ cases, reinsurers, onRefresh }: {
       a.href = url; a.download = `ri_slip_${c.case_number}_${slipDate}.html`; a.click()
       URL.revokeObjectURL(url)
       // Mark slip as generated
-      await api.post('/reinsurance/slips', {
+      await riApi.post('/reinsurance/slips', {
         case_id: c.case_id, reinsurer_id: riSel, treaty,
         retention_amount: retention, ceded_amount: ceded,
         ri_premium: riPrem, cession_effective_date: effDate, cession_expiry_date: expDate||null,
@@ -537,100 +552,154 @@ function GenerateSlipTab({ cases, reinsurers, onRefresh }: {
 // TAB 3 — Reinsurer Registry
 // ══════════════════════════════════════════════════════════════════════════════
 function ReinsurerRegistryTab({ reinsurers, onRefresh }: { reinsurers: Reinsurer[]; onRefresh: () => void }) {
-  const [addForm] = Form.useForm()
-  const [adding, setAdding]   = useState(false)
-  const [saving, setSaving]   = useState<string|null>(null)
-  const [editForms, setEditForms] = useState<Record<string,any>>({})
+  const [addForm]               = Form.useForm()
+  const [editForm]              = Form.useForm()
+  const [adding, setAdding]     = useState(false)
+  const [saving, setSaving]     = useState(false)
+  const [editRi, setEditRi]     = useState<Reinsurer|null>(null)
+  const [subTab, setSubTab]     = useState('list')
 
   const TREATY_TYPES = ['FACULTATIVE','TREATY','QUOTA_SHARE','SURPLUS']
   const CURRENCIES   = ['INR','USD','GBP','EUR','SGD']
 
-  const saveReinsurer = async (id: string, data: any) => {
-    setSaving(id)
+  const openEdit = (ri: Reinsurer) => {
+    setEditRi(ri)
+    editForm.setFieldsValue({
+      name:           ri.name,
+      code:           ri.code,
+      treaty_code:    ri.treaty_code    || '',
+      treaty_type:    ri.treaty_type    || 'FACULTATIVE',
+      email:          ri.email          || '',
+      retention_limit: ri.retention_limit || 0,
+      currency:       ri.currency       || 'INR',
+      eff_date:       ri.treaty_effective_date || '',
+      exp_date:       ri.treaty_expiry_date    || '',
+      product_codes:  ri.product_codes?.join(', ') || '',
+      notes:          ri.notes          || '',
+      is_active:      ri.is_active,
+    })
+  }
+
+  const saveEdit = async () => {
+    if (!editRi) return
+    setSaving(true)
     try {
-      const pcs = data.product_codes ? data.product_codes.split(',').map((x:string)=>x.trim().toUpperCase()).filter(Boolean) : []
-      await api.put(`/reinsurance/reinsurers/${id}`, { ...data, product_codes: pcs })
-      message.success('Reinsurer updated'); onRefresh()
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Save failed') }
-    finally { setSaving(null) }
+      const v   = editForm.getFieldsValue()
+      const pcs = v.product_codes ? v.product_codes.split(',').map((x:string)=>x.trim().toUpperCase()).filter(Boolean) : []
+      const r   = await riApi.put(`/reinsurance/reinsurers/${editRi.id}`, {
+        reinsurer_name: v.name, reinsurer_code: v.code.toUpperCase(),
+        treaty_code: v.treaty_code||null, treaty_type: v.treaty_type,
+        contact_email: v.email||null, retention_limit: v.retention_limit||null,
+        currency: v.currency, is_active: v.is_active,
+        notes: v.notes||null, product_codes: pcs,
+        treaty_effective_date: v.eff_date||null,
+        treaty_expiry_date:    v.exp_date||null,
+      })
+      if (r?.detail) throw new Error(r.detail)
+      message.success('Reinsurer updated')
+      setEditRi(null)
+      onRefresh()
+    } catch(e:any) { message.error(e?.message || 'Save failed') }
+    finally { setSaving(false) }
   }
 
   const addReinsurer = async () => {
-    const v = addForm.getFieldsValue()
-    if (!v.name?.trim() || !v.code?.trim()) { message.error('Name and Code are required'); return }
+    const v = await addForm.validateFields()
     setAdding(true)
     try {
-      await api.post('/reinsurance/reinsurers', {
+      const r = await riApi.post('/reinsurance/reinsurers', {
         reinsurer_name: v.name.trim(), reinsurer_code: v.code.trim().toUpperCase(),
         treaty_code: v.treaty_code||null, treaty_type: v.treaty_type||'FACULTATIVE',
         contact_email: v.email||null, retention_limit: v.retention_limit||null,
         currency: v.currency||'INR', is_active: true,
         notes: v.notes||null,
-        treaty_effective_date: v.eff_date||null, treaty_expiry_date: v.exp_date||null,
+        treaty_effective_date: v.eff_date||null,
+        treaty_expiry_date:    v.exp_date||null,
       })
-      message.success(`${v.name} added`); addForm.resetFields(); onRefresh()
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Add failed') }
+      if (r?.detail) throw new Error(r.detail)
+      message.success(`${v.name} added`)
+      addForm.resetFields()
+      setSubTab('list')
+      onRefresh()
+    } catch(e:any) { message.error(e?.message || 'Add failed') }
     finally { setAdding(false) }
   }
+
+  const today = new Date().toISOString().slice(0,10)
+
+  const columns = [
+    {
+      title: 'Status', width: 70,
+      render: (_:any, ri: Reinsurer) => {
+        const expired = ri.treaty_expiry_date && ri.treaty_expiry_date < today
+        const active  = ri.is_active && !expired
+        return <span style={{ fontSize:18 }}>{active ? '🟢' : expired ? '⚠️' : '⚫'}</span>
+      }
+    },
+    {
+      title: 'Reinsurer', dataIndex: 'name',
+      render: (v:string, ri:Reinsurer) => (
+        <div>
+          <div style={{ fontWeight:600, color:'#e2e8f0', fontSize:13 }}>{v}</div>
+          <div style={{ fontSize:11, color:'#6b7280', fontFamily:'var(--font-mono,monospace)' }}>{ri.code}</div>
+        </div>
+      )
+    },
+    {
+      title: 'Treaty', width: 180,
+      render: (_:any, ri:Reinsurer) => (
+        <div>
+          <Tag style={{ fontSize:11 }}>{ri.treaty_type}</Tag>
+          {ri.treaty_code && <div style={{ fontSize:11, color:'#6b7280', marginTop:3, fontFamily:'var(--font-mono,monospace)' }}>{ri.treaty_code}</div>}
+        </div>
+      )
+    },
+    {
+      title: 'Retention Limit', dataIndex: 'retention_limit', width: 160,
+      render: (v:number) => v ? <span style={{ fontFamily:'var(--font-mono,monospace)', fontSize:12, color:'#9ca3af' }}>{fmt(v)}</span> : <span style={{ color:'#4b5563' }}>—</span>
+    },
+    {
+      title: 'Currency', dataIndex: 'currency', width: 90,
+      render: (v:string) => <Tag style={{ fontSize:11 }}>{v||'INR'}</Tag>
+    },
+    {
+      title: 'Contact', dataIndex: 'email', width: 200,
+      render: (v:string) => v ? <span style={{ fontSize:12, color:'#6b7280' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span>
+    },
+    {
+      title: 'Treaty Period', width: 200,
+      render: (_:any, ri:Reinsurer) => (
+        <div style={{ fontSize:11, color:'#6b7280' }}>
+          {ri.treaty_effective_date ? ri.treaty_effective_date.slice(0,10) : '—'}
+          {' → '}
+          {ri.treaty_expiry_date ? ri.treaty_expiry_date.slice(0,10) : '∞'}
+        </div>
+      )
+    },
+    {
+      title: '', width: 80,
+      render: (_:any, ri:Reinsurer) => (
+        <Button size="small" onClick={() => openEdit(ri)}
+          style={{ borderColor:'rgba(0,212,170,0.25)', color:'#00d4aa' }}>
+          Edit
+        </Button>
+      )
+    },
+  ]
 
   const subTabs = [
     {
       key: 'list',
       label: '📋 All Reinsurers',
-      children: reinsurers.length === 0 ? (
-        <div style={{ color:'#6b7280', fontSize:13 }}>No reinsurers configured yet. Add your first in the Add Reinsurer tab.</div>
-      ) : (
-        <div>
-          {reinsurers.map(ri => {
-            const today = new Date().toISOString().slice(0,10)
-            const expired  = ri.treaty_expiry_date   && ri.treaty_expiry_date   < today
-            const notYet   = ri.treaty_effective_date && ri.treaty_effective_date > today
-            const icon = ri.is_active && !expired && !notYet ? '🟢' : expired || notYet ? '⚠️' : '⚫'
-            const ef = editForms[ri.id] || {}
-            return (
-              <div key={ri.id} style={{ ...card, marginBottom:12 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, cursor:'pointer' }}
-                  onClick={() => setEditForms(f => ({ ...f, [ri.id]: f[ri.id] ? null : {
-                    name: ri.name, code: ri.code, treaty_code: ri.treaty_code,
-                    treaty_type: ri.treaty_type, email: ri.email,
-                    retention_limit: ri.retention_limit, currency: ri.currency,
-                    is_active: ri.is_active, notes: ri.notes,
-                    product_codes: ri.product_codes?.join(', ') || '',
-                    eff_date: ri.treaty_effective_date||'', exp_date: ri.treaty_expiry_date||'',
-                  } }))}>
-                  <span style={{ fontSize:16 }}>{icon}</span>
-                  <strong style={{ color:'#e2e8f0', fontSize:14 }}>{ri.name}</strong>
-                  <Tag style={{ fontFamily:'var(--font-mono,monospace)', fontSize:11 }}>{ri.code}</Tag>
-                  <Tag style={{ fontSize:11 }}>{ri.treaty_type}</Tag>
-                  {ri.retention_limit && <span style={{ fontSize:12, color:'#6b7280' }}>Retention: {fmt(ri.retention_limit)}</span>}
-                  {expired && <Tag color="error">Expired</Tag>}
-                </div>
-                {ef && (
-                  <div>
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Reinsurer Name *</div><Input value={ef.name||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], name:e.target.value } }))}/></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Code *</div><Input value={ef.code||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], code:e.target.value } }))} style={{ fontFamily:'var(--font-mono,monospace)' }}/></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Treaty Code</div><Input value={ef.treaty_code||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], treaty_code:e.target.value } }))}/></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Treaty Type</div><Select value={ef.treaty_type||'FACULTATIVE'} onChange={v => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], treaty_type:v } }))} style={{ width:'100%' }}>{TREATY_TYPES.map(t=><Option key={t} value={t}>{t}</Option>)}</Select></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Contact Email</div><Input value={ef.email||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], email:e.target.value } }))}/></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Retention Limit (₹)</div><InputNumber value={ef.retention_limit||0} onChange={v => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], retention_limit:v } }))} min={0} step={500000} style={{ width:'100%' }} formatter={v=>`₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g,',')} parser={(v:any)=>Number(v!.replace(/₹\s?|(,*)/g,''))}/></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Currency</div><Select value={ef.currency||'INR'} onChange={v => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], currency:v } }))} style={{ width:'100%' }}>{CURRENCIES.map(c=><Option key={c} value={c}>{c}</Option>)}</Select></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Treaty Effective Date</div><Input type="date" value={ef.eff_date||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], eff_date:e.target.value } }))}/></div>
-                      <div><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Treaty Expiry Date</div><Input type="date" value={ef.exp_date||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], exp_date:e.target.value } }))}/></div>
-                    </div>
-                    <div style={{ marginBottom:12 }}><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Product Codes (comma-separated)</div><Input value={ef.product_codes||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], product_codes:e.target.value } }))} placeholder="e.g. IND-TERM-20, IND-TERM-30"/></div>
-                    <div style={{ marginBottom:12 }}><div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>Notes</div><TextArea value={ef.notes||''} onChange={e => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], notes:e.target.value } }))} rows={2}/></div>
-                    <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
-                      <Switch checked={ef.is_active} onChange={v => setEditForms(f => ({ ...f, [ri.id]:{ ...f[ri.id], is_active:v } }))}/>
-                      <span style={{ fontSize:13, color:'#9ca3af' }}>Active</span>
-                    </div>
-                    <Button type="primary" icon={<SaveOutlined/>} loading={saving===ri.id} onClick={() => saveReinsurer(ri.id, ef)}>Save Changes</Button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+      children: (
+        <Table
+          dataSource={reinsurers}
+          columns={columns}
+          rowKey="id"
+          size="middle"
+          pagination={{ pageSize: 20, showSizeChanger: true }}
+          locale={{ emptyText: <span style={{ color:'#6b7280' }}>No reinsurers configured yet. Add your first in the Add Reinsurer tab.</span> }}
+        />
       ),
     },
     {
@@ -640,14 +709,14 @@ function ReinsurerRegistryTab({ reinsurers, onRefresh }: { reinsurers: Reinsurer
         <div style={{ maxWidth:700 }}>
           <Form form={addForm} layout="vertical" requiredMark={false}>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-              <Form.Item name="name" label="Reinsurer Name *" rules={[{required:true}]}><Input placeholder="e.g. Munich Re India"/></Form.Item>
-              <Form.Item name="code" label="Code *" rules={[{required:true}]}><Input placeholder="e.g. MUNICH-RE" style={{ fontFamily:'var(--font-mono,monospace)', textTransform:'uppercase' }}/></Form.Item>
+              <Form.Item name="name" label="Reinsurer Name" rules={[{required:true, message:'Required'}]}><Input placeholder="e.g. Munich Re India"/></Form.Item>
+              <Form.Item name="code" label="Code" rules={[{required:true, message:'Required'}]}><Input placeholder="e.g. MUNICH-RE" style={{ fontFamily:'var(--font-mono,monospace)', textTransform:'uppercase' }}/></Form.Item>
               <Form.Item name="treaty_code" label="Treaty Code"><Input placeholder="e.g. FAC-2026-001"/></Form.Item>
               <Form.Item name="treaty_type" label="Treaty Type" initialValue="FACULTATIVE">
                 <Select>{TREATY_TYPES.map(t=><Option key={t} value={t}>{t}</Option>)}</Select>
               </Form.Item>
               <Form.Item name="email" label="Contact Email"><Input placeholder="ri@munichre.com"/></Form.Item>
-              <Form.Item name="retention_limit" label="Retention Limit (₹)" help="Maximum face amount the carrier retains before ceding the balance to this reinsurer">
+              <Form.Item name="retention_limit" label="Retention Limit (₹)">
                 <InputNumber min={0} step={500000} style={{ width:'100%' }} formatter={v=>`₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g,',')} parser={(v:any)=>Number(v!.replace(/₹\s?|(,*)/g,''))}/>
               </Form.Item>
               <Form.Item name="currency" label="Currency" initialValue="INR">
@@ -656,7 +725,7 @@ function ReinsurerRegistryTab({ reinsurers, onRefresh }: { reinsurers: Reinsurer
               <Form.Item name="eff_date" label="Treaty Effective Date"><Input type="date"/></Form.Item>
               <Form.Item name="exp_date" label="Treaty Expiry Date"><Input type="date"/></Form.Item>
             </div>
-            <Form.Item name="notes" label="Notes" help="Internal notes about this reinsurer — treaty scope, special conditions, contacts"><TextArea rows={2} placeholder="e.g. Covers all substandard lives up to Table 8; excludes HIV and aviation"/></Form.Item>
+            <Form.Item name="notes" label="Notes"><TextArea rows={2} placeholder="e.g. Covers all substandard lives up to Table 8"/></Form.Item>
             <Button type="primary" icon={<PlusOutlined/>} loading={adding} onClick={addReinsurer} block>➕ Add Reinsurer</Button>
           </Form>
         </div>
@@ -664,7 +733,50 @@ function ReinsurerRegistryTab({ reinsurers, onRefresh }: { reinsurers: Reinsurer
     },
   ]
 
-  return <Tabs items={subTabs} tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:16 }}/>
+  return (
+    <>
+      <Tabs activeKey={subTab} onChange={setSubTab} items={subTabs}
+        tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:16 }}/>
+
+      {/* Edit Modal */}
+      <Modal
+        title={<span style={{ color:'#e2e8f0' }}>Edit Reinsurer — {editRi?.name}</span>}
+        open={!!editRi}
+        onCancel={() => setEditRi(null)}
+        onOk={saveEdit}
+        okText="Save Changes"
+        confirmLoading={saving}
+        width={700}
+        styles={{ content:{ background:'var(--navy-800,#0a1628)', border:'1px solid rgba(255,255,255,0.1)' },
+                  header:{ background:'var(--navy-800,#0a1628)' } }}
+      >
+        <Form form={editForm} layout="vertical" requiredMark={false} style={{ marginTop:16 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <Form.Item name="name" label="Reinsurer Name" rules={[{required:true}]}><Input/></Form.Item>
+            <Form.Item name="code" label="Code" rules={[{required:true}]}><Input style={{ fontFamily:'var(--font-mono,monospace)', textTransform:'uppercase' }}/></Form.Item>
+            <Form.Item name="treaty_code" label="Treaty Code"><Input/></Form.Item>
+            <Form.Item name="treaty_type" label="Treaty Type">
+              <Select>{TREATY_TYPES.map(t=><Option key={t} value={t}>{t}</Option>)}</Select>
+            </Form.Item>
+            <Form.Item name="email" label="Contact Email"><Input/></Form.Item>
+            <Form.Item name="retention_limit" label="Retention Limit (₹)">
+              <InputNumber min={0} step={500000} style={{ width:'100%' }} formatter={v=>`₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g,',')} parser={(v:any)=>Number(v!.replace(/₹\s?|(,*)/g,''))}/>
+            </Form.Item>
+            <Form.Item name="currency" label="Currency">
+              <Select>{CURRENCIES.map(c=><Option key={c} value={c}>{c}</Option>)}</Select>
+            </Form.Item>
+            <Form.Item name="eff_date" label="Treaty Effective Date"><Input type="date"/></Form.Item>
+            <Form.Item name="exp_date" label="Treaty Expiry Date"><Input type="date"/></Form.Item>
+          </div>
+          <Form.Item name="product_codes" label="Product Codes (comma-separated)"><Input placeholder="e.g. IND-TERM-20, IND-TERM-30"/></Form.Item>
+          <Form.Item name="notes" label="Notes"><TextArea rows={2}/></Form.Item>
+          <Form.Item name="is_active" label="Active" valuePropName="checked">
+            <Switch/>
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
+  )
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -676,8 +788,8 @@ function CessionHistoryTab() {
   const [search, setSearch]   = useState('')
 
   useEffect(() => {
-    api.get('/reinsurance/cessions')
-      .then(r => setHistory(Array.isArray(r.data) ? r.data : []))
+    riApi.get('/reinsurance/cessions')
+      .then(r => setHistory(Array.isArray(r) ? r : []))
       .catch(() => setHistory([]))
       .finally(() => setLoading(false))
   }, [])
@@ -715,7 +827,7 @@ function CessionHistoryTab() {
       <div style={{ display:'flex', gap:10, marginBottom:16, alignItems:'center' }}>
         <Input placeholder="Search cession ref, case, reinsurer…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth:320 }} allowClear/>
         <Button icon={<DownloadOutlined/>} onClick={exportCSV} style={{ marginLeft:'auto' }}>Export CSV</Button>
-        <Button icon={<ReloadOutlined/>} onClick={() => { setLoading(true); api.get('/reinsurance/cessions').then(r => setHistory(Array.isArray(r.data)?r.data:[])).finally(()=>setLoading(false)) }}/>
+        <Button icon={<ReloadOutlined/>} onClick={() => { setLoading(true); riApi.get('/reinsurance/cessions').then(r => setHistory(Array.isArray(r)?r:[])).finally(()=>setLoading(false)) }}/>
       </div>
       {loading ? <Spin/> : (
         <Table dataSource={filtered} columns={cols} rowKey="cession_ref" size="small"
@@ -740,13 +852,13 @@ export default function ReinsurancePage() {
     setLoading(true)
     try {
       const [cR, rR, sR] = await Promise.all([
-        api.get('/reinsurance/cases').catch(() => ({ data: [] })),
-        api.get('/reinsurance/reinsurers').catch(() => ({ data: [] })),
-        api.get('/reinsurance/stats').catch(() => api.get('/reinsurance/summary').catch(() => ({ data: null }))),
+        riApi.get('/reinsurance/cases').catch(() => []),
+        riApi.get('/reinsurance/reinsurers').catch(() => []),
+        riApi.get('/reinsurance/stats').catch(() => riApi.get('/reinsurance/summary').catch(() => null)),
       ])
-      setCases(Array.isArray(cR.data) ? cR.data : [])
-      setReinsurers(Array.isArray(rR.data) ? rR.data : [])
-      if (sR.data) setStats(sR.data)
+      setCases(Array.isArray(cR) ? cR : [])
+      setReinsurers(Array.isArray(rR) ? rR : [])
+      if (sR) setStats(sR)
     } catch(e:any) { message.error('Failed to load reinsurance data') }
     finally { setLoading(false) }
   }
@@ -804,3 +916,4 @@ export default function ReinsurancePage() {
     </div>
   )
 }
+

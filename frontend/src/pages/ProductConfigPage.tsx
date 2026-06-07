@@ -473,24 +473,36 @@ function BuildTableTab({ code }: { code: string }) {
 // TAB 4 — Edit Product
 // ══════════════════════════════════════════════════════════════════════════════
 function EditProductTab({ code, onSaved }: { code: string; onSaved: () => void }) {
-  const [form]              = Form.useForm()
   const [loading, setLoad]  = useState(true)
   const [saving, setSaving] = useState(false)
+  const [prodData, setProdData] = useState<Record<string, any> | null>(null)
+  const [form]              = Form.useForm()
+  const [isGI, setIsGI]     = useState(false)
+  const [isGP, setIsGP]     = useState(false)
+
+  const mapProduct = (d: any) => ({
+    ...d,
+    available_terms:     Array.isArray(d.available_terms) ? d.available_terms.join(',') : (d.available_terms || ''),
+    effective_date:      d.effective_date?.slice(0,10) || '',
+    expire_date:         d.expire_date?.slice(0,10)    || '',
+    is_guaranteed_issue: Boolean(d.is_guaranteed_issue),
+    is_group_product:    Boolean(d.is_group_product),
+    is_active:           d.is_active !== false,
+  })
 
   const load = async () => {
     setLoad(true)
+    setProdData(null)
     try {
       const r = await api.get(`/products/${code}`)
-      const d = r.data
-      form.setFieldsValue({
-        ...d,
-        available_terms: d.available_terms?.join(',') || '',
-        effective_date:  d.effective_date?.slice(0,10) || '',
-        expire_date:     d.expire_date?.slice(0,10)    || '',
-      })
+      const mp = mapProduct(r.data)
+      setProdData(mp)
+      setIsGI(Boolean(mp.is_guaranteed_issue))
+      setIsGP(Boolean(mp.is_group_product))
     } catch { message.error('Failed to load product') }
     finally { setLoad(false) }
   }
+
   useEffect(() => { if (code) load() }, [code])
 
   const parseTerms = (s: string) => {
@@ -499,7 +511,8 @@ function EditProductTab({ code, onSaved }: { code: string; onSaved: () => void }
   }
 
   const save = async () => {
-    const v = form.getFieldsValue()
+    const v = form.getFieldsValue(true)
+    console.log('SAVE is_guaranteed_issue:', v.is_guaranteed_issue, 'is_group_product:', v.is_group_product)
     const errs = []
     if (!v.product_name?.trim()) errs.push('Product Name is required')
     if (v.min_age >= v.max_age)  errs.push('Min Age must be less than Max Age')
@@ -510,30 +523,48 @@ function EditProductTab({ code, onSaved }: { code: string; onSaved: () => void }
 
     setSaving(true)
     try {
-      const payload = {
+      // Clean string fields — remove any that are false/undefined (unset Select components)
+      const STRING_FIELDS = ['exam_required','product_type','category','uw_method','product_name']
+      const payload: Record<string, any> = {
         ...v,
-        available_terms: parseTerms(v.available_terms),
-        effective_date:  v.effective_date || null,
-        expire_date:     v.expire_date || null,
+        available_terms:     parseTerms(v.available_terms),
+        effective_date:      v.effective_date || null,
+        expire_date:         v.expire_date || null,
+        is_guaranteed_issue: isGI,
+        is_group_product:    isGP,
+      }
+      for (const f of STRING_FIELDS) {
+        if (payload[f] === false || payload[f] === undefined) delete payload[f]
+        if (payload[f] === '') payload[f] = null
       }
       await api.patch(`/products/${code}`, payload)
-      message.success('Product updated'); onSaved()
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Save failed') }
-    finally { setSaving(false) }
+      message.success('Product updated successfully')
+      onSaved()
+      setProdData(null)  // force re-render
+      load()  // reload form to confirm saved values
+    } catch(e:any) {
+      const detail = e?.response?.data?.detail || e?.message || 'Save failed'
+      message.error(`Failed to save: ${detail}`)
+    } finally { setSaving(false) }
   }
 
-  if (loading) return <div style={{ display:'flex', justifyContent:'center', padding:40 }}><Spin size="large"/></div>
+  if (loading || !prodData) return <div style={{ display:'flex', justifyContent:'center', padding:40 }}><Spin size="large"/></div>
 
   return (
     <div style={{ maxWidth: 860 }}>
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <Form key={prodData ? JSON.stringify({gi: prodData.is_guaranteed_issue, gp: prodData.is_group_product, ia: prodData.is_active}) : "loading"} form={form} initialValues={prodData || {}} layout="vertical" requiredMark={false}>
         {/* Identity */}
         <div style={card}>
           <div style={secTitle}>Product Identity</div>
+          <div style={{ marginBottom:16, padding:'10px 14px', background:'rgba(0,212,170,0.05)', border:'1px solid rgba(0,212,170,0.2)', borderRadius:8, display:'flex', alignItems:'center', gap:12 }}>
+            <span style={{ fontSize:11, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.08em' }}>Product Code</span>
+            <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, fontSize:15, color:'#00d4aa', letterSpacing:'0.05em' }}>{code}</span>
+            <span style={{ fontSize:11, color:'#4b5563' }}>· Read-only — product code cannot be changed after creation</span>
+          </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
             <Form.Item name="product_name" label="Product Name *" rules={[{required:true}]} help="Full marketing name of the product"><Input placeholder="e.g. Individual Term Life 20yr"/></Form.Item>
             <Form.Item name="product_type" label="Product Type *" help="Broad classification — Term, Endowment, ULIP, etc.">
-              <Select placeholder="Select type…">{PRODUCT_TYPES.map(t => <Option key={t} value={t}>{t}</Option>)}</Select>
+              <Select onChange={(v: string) => { if (v.toLowerCase().startsWith("group")) setIsGP(true); else setIsGP(false) }} placeholder="Select type…">{PRODUCT_TYPES.map(t => <Option key={t} value={t}>{t}</Option>)}</Select>
             </Form.Item>
             <Form.Item name="category" label="Product Category *" help="Individual, Group, or Micro-insurance">
               <Select placeholder="Select category…">{CATEGORIES.map(c => <Option key={c} value={c}>{c}</Option>)}</Select>
@@ -627,12 +658,14 @@ function EditProductTab({ code, onSaved }: { code: string; onSaved: () => void }
         <div style={card}>
           <div style={secTitle}>Additional Settings</div>
           <div style={{ display:'flex', gap:24, marginBottom:16 }}>
-            <Form.Item name="is_guaranteed_issue" valuePropName="checked" style={{ margin:0 }}>
-              <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Guaranteed Issue</span>
-            </Form.Item>
-            <Form.Item name="is_group_product" valuePropName="checked" style={{ margin:0 }}>
-              <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Group Product</span>
-            </Form.Item>
+            <div style={{ display:"flex", alignItems:"center", gap:8, margin:0 }}>
+              <Switch checked={isGI} onChange={v => setIsGI(v)}/>
+              <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Guaranteed Issue</span>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:8, margin:0, marginTop:8 }}>
+              <Switch checked={isGP} onChange={v => setIsGP(v)}/>
+              <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Group Product</span>
+            </div>
           </div>
           <Form.Item name="description" label="Product Description" help="Customer-facing description shown on proposal forms and letters">
             <TextArea rows={3} placeholder="e.g. A pure protection term plan providing life cover for a specified period…"/>
@@ -842,7 +875,7 @@ function AddProductTab({ onCreated }: { onCreated: () => void }) {
 
   const save = async () => {
     try { await form.validateFields() } catch { return }
-    const v = form.getFieldsValue()
+    const v = form.getFieldsValue(true)
     const errs = []
     if (v.min_age >= v.max_age) errs.push('Min Age must be less than Max Age')
     if (v.min_face_amount >= v.max_face_amount) errs.push('Min Face must be less than Max Face')
@@ -891,7 +924,7 @@ function AddProductTab({ onCreated }: { onCreated: () => void }) {
               <Input placeholder="e.g. Individual Term Life 20yr"/>
             </Form.Item>
             <Form.Item name="product_type" label="Product Type *">
-              <Select>{PRODUCT_TYPES.map(t => <Option key={t} value={t}>{t}</Option>)}</Select>
+              <Select onChange={(v: string) => { form.setFieldValue("is_group_product", v.toLowerCase().startsWith("group")) }}>{PRODUCT_TYPES.map(t => <Option key={t} value={t}>{t}</Option>)}</Select>
             </Form.Item>
             <Form.Item name="category" label="Product Category *">
               <Select>{CATEGORIES.map(c => <Option key={c} value={c}>{c}</Option>)}</Select>
@@ -964,12 +997,14 @@ function AddProductTab({ onCreated }: { onCreated: () => void }) {
             <Form.Item name="is_active" valuePropName="checked" style={{ margin:0 }}>
               <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Product Active</span>
             </Form.Item>
-            <Form.Item name="is_guaranteed_issue" valuePropName="checked" style={{ margin:0 }}>
-              <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Guaranteed Issue</span>
-            </Form.Item>
-            <Form.Item name="is_group_product" valuePropName="checked" style={{ margin:0 }}>
-              <Switch/> <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Group Product</span>
-            </Form.Item>
+            <div style={{ display:"flex", alignItems:"center", gap:8, margin:0 }}>
+              <Form.Item name="is_guaranteed_issue" valuePropName="checked" noStyle><Switch/></Form.Item>
+              <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Guaranteed Issue</span>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:8, margin:0, marginTop:8 }}>
+              <Form.Item name="is_group_product" valuePropName="checked" noStyle><Switch/></Form.Item>
+              <span style={{ fontSize:13, color:'#9ca3af', marginLeft:8 }}>Group Product</span>
+            </div>
           </div>
           <Form.Item name="description" label="Product Description"><TextArea rows={3}/></Form.Item>
           <Form.Item name="uw_notes"    label="UW Notes / Exam Notes"><TextArea rows={2}/></Form.Item>
@@ -1076,4 +1111,5 @@ export default function ProductConfigPage() {
     </div>
   )
 }
+
 

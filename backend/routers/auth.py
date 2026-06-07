@@ -100,8 +100,10 @@ async def login(body: LoginRequest, request: Request):
 
         # Fetch user — accept both username and email (industry standard)
         cur.execute(
-            "SELECT username, hashed_password, role, is_active, tenant_id::text "
-            "FROM uw_user WHERE username = %s AND is_deleted = false",
+            "SELECT u.username, u.hashed_password, u.role, u.is_active, "
+            "u.tenant_id::text, t.tenant_name "
+            "FROM uw_user u LEFT JOIN tenant t ON t.id = u.tenant_id "
+            "WHERE u.username = %s AND u.is_deleted = false",
             (body.username,),
         )
         user = cur.fetchone()
@@ -109,14 +111,16 @@ async def login(body: LoginRequest, request: Request):
         # Fallback: try email lookup if username not found
         if not user and "@" in (body.username or ""):
             cur.execute(
-                "SELECT username, hashed_password, role, is_active, tenant_id::text "
-                "FROM uw_user WHERE email = %s AND is_deleted = false",
+                "SELECT u.username, u.hashed_password, u.role, u.is_active, "
+                "u.tenant_id::text, t.tenant_name "
+                "FROM uw_user u LEFT JOIN tenant t ON t.id = u.tenant_id "
+                "WHERE u.email = %s AND u.is_deleted = false",
                 (body.username,),
             )
             user = cur.fetchone()
         user_dict: dict[str, Any] = (
             dict(user) if hasattr(user, "keys") else
-            dict(zip(["username", "hashed_password", "role", "is_active", "tenant_id"], user))
+            dict(zip(["username", "hashed_password", "role", "is_active", "tenant_id", "tenant_name"], user))
         ) if user else {}
 
         if not user or not user_dict.get("is_active"):
@@ -161,6 +165,7 @@ async def login(body: LoginRequest, request: Request):
                 access_token="",
                 username=body.username,
                 role=user_dict["role"],
+                tenant_id=user_dict.get("tenant_id"),
                 mfa_required=True,
                 mfa_session_token=session_tok,
             )
@@ -175,6 +180,8 @@ async def login(body: LoginRequest, request: Request):
             access_token=token,
             username=body.username,
             role=user_dict["role"],
+            tenant_id=user_dict.get("tenant_id"),
+            tenant_name=user_dict.get("tenant_name"),
         )
     finally:
         release(conn)
@@ -338,8 +345,9 @@ async def get_user(username: str, current: CurrentUser):
         cur.close()
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
-        cols = ["username", "email", "full_name", "role", "is_active", "tenant_id"]
-        return UserOut(**dict(zip(cols, row)))
+        row_dict = dict(row) if hasattr(row, "keys") else dict(zip(["username", "email", "full_name", "role", "is_active", "tenant_id"], row))
+        row_dict["is_active"] = bool(row_dict.get("is_active", False))
+        return UserOut(**{k: v for k, v in row_dict.items() if k in UserOut.model_fields})
     finally:
         release(conn)
 
@@ -390,8 +398,9 @@ async def register_user(body: UserCreate, current: CurrentUser):
         row = cur.fetchone()
         conn.commit()
         cur.close()
-        cols = ["username", "email", "full_name", "role", "is_active", "tenant_id"]
-        return UserOut(**dict(zip(cols, row)))
+        row_dict = dict(row) if hasattr(row, "keys") else dict(zip(["username", "email", "full_name", "role", "is_active", "tenant_id"], row))
+        row_dict["is_active"] = bool(row_dict.get("is_active", False))
+        return UserOut(**{k: v for k, v in row_dict.items() if k in UserOut.model_fields})
     finally:
         release(conn)
 
@@ -419,8 +428,9 @@ async def update_user(username: str, updates: dict, current: CurrentUser):
         cur.close()
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
-        cols = ["username", "email", "full_name", "role", "is_active", "tenant_id"]
-        return UserOut(**dict(zip(cols, row)))
+        row_dict = dict(row) if hasattr(row, "keys") else dict(zip(["username", "email", "full_name", "role", "is_active", "tenant_id"], row))
+        row_dict["is_active"] = bool(row_dict.get("is_active", False))
+        return UserOut(**{k: v for k, v in row_dict.items() if k in UserOut.model_fields})
     finally:
         release(conn)
 
@@ -502,6 +512,288 @@ async def reset_password(username: str, body: PasswordReset, current: CurrentUse
         conn.commit()
         cur.close()
         return {"status": "password_reset", "username": username}
+    finally:
+        release(conn)
+
+
+# ── Forgot / Reset Password ───────────────────────────────────────────────────
+
+@router.post("/forgot-password")
+async def forgot_password(body: dict, request: Request):
+    """
+    Step 1: User submits username or email.
+    Generates a secure reset token (valid 30 min), stores it, sends email.
+    Always returns 200 to avoid user enumeration.
+    """
+    import smtplib, ssl
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    identifier = (body.get("identifier") or "").strip()
+    if not identifier:
+        return {"message": "If that account exists, a reset link has been sent."}
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+
+        # Look up by username or email
+        cur.execute(
+            """
+            SELECT username, email, full_name, is_active
+            FROM uw_user
+            WHERE (username = %s OR email = %s)
+              AND is_deleted = false
+            LIMIT 1
+            """,
+            (identifier, identifier),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"message": "If that account exists, a reset link has been sent."}
+
+        user = dict(row) if hasattr(row, "keys") else dict(
+            zip(["username", "email", "full_name", "is_active"], row)
+        )
+
+        if not user.get("is_active"):
+            return {"message": "If that account exists, a reset link has been sent."}
+
+        email_addr = user.get("email")
+        if not email_addr:
+            return {"message": "No email address on file for this account. Contact your administrator."}
+
+        # Check if user has MFA enabled
+        cur.execute(
+            "SELECT is_enabled, is_verified FROM mfa_config WHERE username = %s",
+            (user["username"],),
+        )
+        mfa_row = cur.fetchone()
+        mfa_dict = dict(mfa_row) if mfa_row and hasattr(mfa_row, "keys") else (
+            dict(zip(["is_enabled", "is_verified"], mfa_row)) if mfa_row else {}
+        )
+        mfa_required = bool(mfa_dict.get("is_enabled") and mfa_dict.get("is_verified"))
+
+        # Generate secure token
+        token = secrets.token_urlsafe(48)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+
+        # Store token — create table if needed
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                token       TEXT PRIMARY KEY,
+                username    TEXT NOT NULL,
+                mfa_verified BOOLEAN DEFAULT FALSE,
+                expires_at  TIMESTAMPTZ NOT NULL,
+                used_at     TIMESTAMPTZ,
+                created_at  TIMESTAMPTZ DEFAULT now()
+            )
+            """
+        )
+        # Invalidate any existing tokens for this user
+        cur.execute(
+            "DELETE FROM password_reset_tokens WHERE username = %s",
+            (user["username"],),
+        )
+        cur.execute(
+            """
+            INSERT INTO password_reset_tokens (token, username, mfa_verified, expires_at)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (token, user["username"], not mfa_required, expires_at),
+        )
+        conn.commit()
+        cur.close()
+
+        # Build reset URL
+        base_url = os.environ.get("FRONTEND_URL", "https://riskuw.online")
+        reset_url = f"{base_url}/reset-password?token={token}"
+        if mfa_required:
+            reset_url += "&mfa=required"
+
+        # Send email
+        smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.environ.get("SMTP_PORT", 587))
+        smtp_user = os.environ.get("SMTP_USER", "")
+        smtp_pass = os.environ.get("SMTP_PASSWORD", "")
+        smtp_from = os.environ.get("SMTP_FROM", smtp_user)
+        full_name  = user.get("full_name") or user["username"]
+
+        html_body = f"""
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;background:#0a1628;color:#e2e8f0;border-radius:12px;overflow:hidden;">
+          <div style="background:linear-gradient(135deg,#0a1e44,#061828);padding:32px 40px;border-bottom:1px solid rgba(0,212,170,0.2);">
+            <div style="font-size:20px;font-weight:700;color:#fff;">🛡️ RiskUW</div>
+            <div style="font-size:11px;color:#00d4aa;letter-spacing:0.1em;margin-top:4px;">AUTOMATED UNDERWRITING</div>
+          </div>
+          <div style="padding:36px 40px;">
+            <h2 style="color:#fff;font-size:22px;margin:0 0 12px;">Password Reset Request</h2>
+            <p style="color:#94a3b8;line-height:1.7;margin:0 0 24px;">
+              Hi {full_name},<br><br>
+              We received a request to reset your RiskUW password.
+              {"Since your account has <strong style='color:#00d4aa'>MFA enabled</strong>, you will need to verify your authenticator code before setting a new password." if mfa_required else ""}
+            </p>
+            <a href="{reset_url}" style="display:inline-block;background:#00d4aa;color:#0a1628;font-weight:700;font-size:15px;padding:14px 32px;border-radius:8px;text-decoration:none;">
+              Reset My Password →
+            </a>
+            <p style="color:#64748b;font-size:12px;margin:28px 0 0;line-height:1.7;">
+              This link expires in <strong style="color:#94a3b8">30 minutes</strong>.<br>
+              If you did not request this, you can safely ignore this email.<br>
+              Your password will not change unless you click the link above.
+            </p>
+          </div>
+          <div style="padding:20px 40px;background:rgba(0,0,0,0.2);font-size:11px;color:#475569;">
+            © 2025 RiskUW · riskuw.online · Secure · IRDAI-aligned
+          </div>
+        </div>
+        """
+
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = "RiskUW — Password Reset Request"
+            msg["From"]    = smtp_from
+            msg["To"]      = email_addr
+            msg.attach(MIMEText(html_body, "html"))
+
+            context = ssl.create_default_context()
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_from, email_addr, msg.as_string())
+        except Exception as mail_err:
+            import logging
+            logging.getLogger("uw_platform").error(f"Password reset email failed: {mail_err}")
+
+        _audit(conn, "PASSWORD_RESET_REQUESTED", user["username"],
+               user["username"], {"ip": request.client.host if request.client else None})
+        conn.commit()
+
+        return {"message": "If that account exists, a reset link has been sent."}
+    finally:
+        release(conn)
+
+
+@router.post("/verify-reset-mfa")
+async def verify_reset_mfa(body: dict):
+    """
+    Step 2 (MFA users only): Verify TOTP before allowing password reset.
+    Marks the token as mfa_verified=true.
+    """
+    token     = (body.get("token") or "").strip()
+    totp_code = (body.get("totp_code") or "").strip()
+
+    if not token or not totp_code:
+        raise HTTPException(status_code=400, detail="token and totp_code are required")
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT username, mfa_verified, expires_at, used_at
+            FROM password_reset_tokens
+            WHERE token = %s
+            """,
+            (token,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+        t = dict(row) if hasattr(row, "keys") else dict(
+            zip(["username", "mfa_verified", "expires_at", "used_at"], row)
+        )
+        if t.get("used_at"):
+            raise HTTPException(status_code=400, detail="Reset link already used")
+        if t["expires_at"] < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Reset link has expired")
+
+        # Verify TOTP
+        cur.execute(
+            "SELECT totp_secret FROM mfa_config WHERE username = %s AND is_enabled = true",
+            (t["username"],),
+        )
+        mfa_row = cur.fetchone()
+        if not mfa_row:
+            raise HTTPException(status_code=400, detail="MFA not configured")
+
+        secret = mfa_row[0] if isinstance(mfa_row, tuple) else mfa_row.get("totp_secret")
+        totp   = pyotp.TOTP(secret)
+        if not totp.verify(totp_code, valid_window=1):
+            raise HTTPException(status_code=400, detail="Invalid authenticator code")
+
+        cur.execute(
+            "UPDATE password_reset_tokens SET mfa_verified = true WHERE token = %s",
+            (token,),
+        )
+        conn.commit()
+        cur.close()
+        return {"message": "MFA verified", "username": t["username"]}
+    finally:
+        release(conn)
+
+
+@router.post("/reset-password-confirm")
+async def reset_password_confirm(body: dict):
+    """
+    Final step: Set new password using the reset token.
+    Token must be mfa_verified=true (auto-true for non-MFA users).
+    """
+    token        = (body.get("token") or "").strip()
+    new_password = (body.get("new_password") or "").strip()
+
+    if not token or not new_password:
+        raise HTTPException(status_code=400, detail="token and new_password are required")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT username, mfa_verified, expires_at, used_at
+            FROM password_reset_tokens
+            WHERE token = %s
+            """,
+            (token,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+        t = dict(row) if hasattr(row, "keys") else dict(
+            zip(["username", "mfa_verified", "expires_at", "used_at"], row)
+        )
+        if t.get("used_at"):
+            raise HTTPException(status_code=400, detail="Reset link already used")
+        if t["expires_at"] < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Reset link has expired")
+        if not t.get("mfa_verified"):
+            raise HTTPException(status_code=403, detail="MFA verification required before resetting password")
+
+        # Update password and mark token used
+        cur.execute(
+            "UPDATE uw_user SET hashed_password=%s, updated_at=now(), updated_by='self_reset' "
+            "WHERE username=%s AND is_deleted=false",
+            (_hash(new_password), t["username"]),
+        )
+        cur.execute(
+            "UPDATE password_reset_tokens SET used_at=now() WHERE token=%s",
+            (token,),
+        )
+        # Clear any login lockouts
+        cur.execute(
+            "UPDATE login_attempts SET failed_count=0, locked_until=NULL WHERE username=%s",
+            (t["username"],),
+        )
+        conn.commit()
+        _audit(conn, "PASSWORD_RESET_COMPLETED", t["username"], t["username"],
+               {"method": "self_reset"})
+        conn.commit()
+        cur.close()
+        return {"message": "Password reset successfully. You can now log in."}
     finally:
         release(conn)
 

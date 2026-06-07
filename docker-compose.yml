@@ -71,6 +71,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${DB_USER:-uw_user}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-uw_platform}
       REDIS_URL:    redis://redis:6379/0
+      OLLAMA_HOST:  "http://dnb_ollama:11434"
       ENVIRONMENT:  ${ENVIRONMENT:-production}
     depends_on:
       postgres:
@@ -89,6 +90,7 @@ services:
       start_period: 30s
     networks:
       - riskuw-network
+      - dnb_default
 
   # ── Worker (same image as fastapi — different command) ───────────────────────
   worker:
@@ -119,7 +121,6 @@ services:
       dockerfile: Dockerfile.frontend
       args:
         VITE_API_BASE: ""
-    image: vsch63/riskuw-frontend:latest
     container_name: riskuw_frontend
     restart: unless-stopped
     depends_on:
@@ -147,8 +148,11 @@ volumes:
     name: riskuw_worker_logs
 
 # ── Separate network — zero overlap with DNB ───────────────────────────────────
+
 networks:
   riskuw-network:
     name: riskuw-network
     driver: bridge
 
+  dnb_default:
+    external: true

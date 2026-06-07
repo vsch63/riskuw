@@ -70,7 +70,6 @@ class LabValues(BaseModel):
     egfr: float | None = None
 
 class EvaluateRequest(BaseModel):
-    model_config = {"extra": "allow"}   # allow user-label fields (sa_percentage etc.)
     applicant_ref: str = "APP-001"
     age: int
     gender: str
@@ -515,7 +514,7 @@ def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
                 engine    = PremiumEngine(conn)
                 prem      = engine.calculate(
                     product_code = body.product_code,
-                    applicant    = body.model_dump(exclude_none=False),
+                    applicant    = body.model_dump(),
                     uw_result    = {
                         "net_debit_points": debits,
                         "risk_class":       risk_class,
@@ -631,61 +630,3 @@ def list_cases(current: CurrentUser, page_size: int = 50, page: int = 1):
         return [dict(r) for r in rows]
     finally:
         release(conn)
-
-
-# ── AI Score endpoint ─────────────────────────────────────────────────────────
-
-class AIScoreRequest(BaseModel):
-    engine:       str = "xgboost"   # xgboost | claude | ollama
-    ollama_model: str | None = None  # override ollama model
-    # All underwriting fields
-    applicant_ref:        str   = "AI-SCORE"
-    product_code:         str   = ""
-    age:                  int   = 35
-    gender:               str   = "MALE"
-    state:                str   = "MH"
-    face_amount:          float = 0
-    coverage_term_yrs:    int   = 20
-    tobacco_status:       str   = "NON_TOBACCO"
-    height_inches:        float | None = None
-    weight_lbs:           float | None = None
-    systolic_bp:          int   = 120
-    diastolic_bp:         int   = 80
-    diabetes_type:        str   = "NONE"
-    heart_condition:      str   = "NONE"
-    hiv_positive:         bool  = False
-    cirrhosis:            bool  = False
-    stroke_history:       bool  = False
-    kidney_disease:       bool  = False
-    depression_history:   bool  = False
-    depression_hospitalized: bool = False
-    epilepsy:             bool  = False
-    copd:                 bool  = False
-    alcohol_drinks_week:  int   = 0
-    hazardous_activity:   bool  = False
-    occupation_class:     int   = 1
-    annual_income:        float = 0
-    existing_coverage:    float = 0
-    # Pass UW decision context for richer AI assessment
-    uw_outcome:           str   = ""
-    net_debit_points:     int   = 0
-
-
-@router.post("/ai-score")
-def ai_score(body: AIScoreRequest, current: CurrentUser):
-    """
-    Get AI risk assessment from chosen engine.
-    Engines: xgboost (local ML), claude (Anthropic API), ollama (local LLM)
-    """
-    from services.ai_score import get_ai_score
-    conn, release = _get_db()
-    try:
-        payload = body.model_dump()
-        result  = get_ai_score(payload, engine=body.engine, conn=conn)
-        return result
-    except Exception as e:
-        logger.error(f"AI score failed: {e}", exc_info=True)
-        return {"error": str(e)}
-    finally:
-        release(conn)
-

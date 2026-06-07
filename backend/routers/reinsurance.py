@@ -364,7 +364,7 @@ def update_reinsurer(rid: str, body: ReinsurerUpdate, current: CurrentUser):
     try:
         cur = conn.cursor()
         cur.execute(
-            f"UPDATE ri_reinsurer SET {sets} WHERE id=%s::uuid RETURNING id::text",
+            f"UPDATE ri_reinsurer SET {sets} WHERE id::text=%s RETURNING id::text",
             (*vals, rid)
         )
         row = cur.fetchone()
@@ -433,12 +433,12 @@ def create_cession(body: CessionCreate, current: CurrentUser):
         cur = conn.cursor()
 
         # Get application_id from case
-        cur.execute("SELECT application_id FROM uw_case WHERE id=%s::uuid", (body.case_id,))
+        cur.execute("SELECT application_id FROM uw_case WHERE id::text=%s", (body.case_id,))
         row = cur.fetchone()
         app_id = str(row["application_id"]) if row else None
 
         # Get treaty_code from reinsurer
-        cur.execute("SELECT treaty_code FROM ri_reinsurer WHERE id=%s::uuid", (body.reinsurer_id,))
+        cur.execute("SELECT treaty_code FROM ri_reinsurer WHERE id::text=%s", (body.reinsurer_id,))
         ri_row = cur.fetchone()
         treaty = ri_row["treaty_code"] if ri_row else None
 
@@ -518,7 +518,7 @@ def patch_cession(cid: str, body: CessionPatch, current: CurrentUser):
         notes_append = updates.pop("_notes_append", None)
         if notes_append:
             cur.execute(
-                "UPDATE ri_cession SET notes = COALESCE(notes || ' | ', '') || %s WHERE id=%s::uuid",
+                "UPDATE ri_cession SET notes = COALESCE(notes || ' | ', '') || %s WHERE id::text=%s",
                 (notes_append, cid)
             )
 
@@ -537,7 +537,7 @@ def patch_cession(cid: str, body: CessionPatch, current: CurrentUser):
         if set_parts:
             set_parts.append("updated_at=NOW()")
             cur.execute(
-                f"UPDATE ri_cession SET {', '.join(set_parts)} WHERE id=%s::uuid RETURNING id::text",
+                f"UPDATE ri_cession SET {', '.join(set_parts)} WHERE id::text=%s RETURNING id::text",
                 (*vals, cid)
             )
             row = cur.fetchone()

@@ -7,6 +7,23 @@ import {
 } from '@ant-design/icons'
 import { api } from '../api/client'
 
+// Direct fetch helper for /audit/* routes (not proxied via /api)
+const _tok = () => localStorage.getItem('riskuw_token') || ''
+const auditApi = {
+  get: (path: string, params?: Record<string,any>) => {
+    const url = new URL(path, window.location.origin)
+    if (params) Object.entries(params).forEach(([k,v]) => v != null && v !== '' && url.searchParams.set(k, String(v)))
+    return fetch(url.toString(), { headers: { Authorization: `Bearer ${_tok()}` } }).then(r => r.json())
+  },
+  getBlob: (path: string, params?: Record<string,any>) => {
+    const url = new URL(path, window.location.origin)
+    if (params) Object.entries(params).forEach(([k,v]) => v != null && v !== '' && url.searchParams.set(k, String(v)))
+    return fetch(url.toString(), { headers: { Authorization: `Bearer ${_tok()}` } })
+  },
+  post: (path: string, body?: any) =>
+    fetch(path, { method:'POST', headers: { Authorization:`Bearer ${_tok()}`, 'Content-Type':'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+}
+
 const { Option } = Select
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -61,8 +78,8 @@ function EventDetail({ event, onClose }: { event: AuditEvent; onClose: () => voi
 
   useEffect(() => {
     if (event.entity_id) {
-      api.get(`/audit/entity/${event.entity_id}`)
-        .then(r => setTimeline(Array.isArray(r.data) ? r.data : []))
+      auditApi.get(`/audit/entity/${event.entity_id}`)
+        .then(r => setTimeline(Array.isArray(r) ? r : []))
         .catch(() => {})
     }
   }, [event.entity_id])
@@ -192,19 +209,19 @@ export default function AuditLogPage() {
   const [page, setPage]         = useState(1)
 
   const loadStats = async () => {
-    try { const r = await api.get('/audit/stats'); setStats(r.data) } catch {}
+    try { const r = await auditApi.get('/audit/stats'); setStats(r) } catch {}
   }
 
   const load = async (p = page) => {
     setLoading(true)
     try {
-      const r = await api.get('/audit', {
-        params: { search, date_from: dateFrom, date_to: dateTo, category, outcome, page: p, page_size: 50 }
+      const r = await auditApi.get('/audit', {
+        search, date_from: dateFrom, date_to: dateTo, category, outcome, page: p, page_size: 50
       })
-      setEvents(r.data.events || [])
-      setTotal(r.data.total || 0)
-      setTP(r.data.total_pages || 1)
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed to load audit log') }
+      setEvents(r.events || [])
+      setTotal(r.total || 0)
+      setTP(r.total_pages || 1)
+    } catch(e:any) { message.error(e?.detail || 'Failed to load audit log') }
     finally { setLoading(false) }
   }
 
@@ -216,12 +233,12 @@ export default function AuditLogPage() {
   const exportCsv = async () => {
     setExport(true)
     try {
-      const r = await api.get('/audit/export', {
-        params: { search, date_from: dateFrom, date_to: dateTo, category, outcome },
-        responseType: 'blob',
+      const r = await auditApi.getBlob('/audit/export', {
+        search, date_from: dateFrom, date_to: dateTo, category, outcome
       })
-      const url = URL.createObjectURL(new Blob([r.data], { type:'text/csv' }))
-      const a   = document.createElement('a')
+      const blob = await r.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
       a.href = url; a.download = `audit_${dateFrom}_${dateTo}.csv`; a.click()
       URL.revokeObjectURL(url)
       message.success('Export downloaded')
@@ -232,10 +249,10 @@ export default function AuditLogPage() {
   const seedLogin = async () => {
     setSeeding(true)
     try {
-      await api.post('/audit/seed', { note: 'Manual seed from Audit Log page' })
+      await auditApi.post('/audit/seed', { note: 'Manual seed from Audit Log page' })
       message.success('✅ Login event written to audit trail')
       loadStats(); load(1)
-    } catch(e:any) { message.error(e?.response?.data?.detail || 'Seed failed') }
+    } catch(e:any) { message.error(e?.detail || 'Seed failed') }
     finally { setSeeding(false) }
   }
 
@@ -422,3 +439,4 @@ export default function AuditLogPage() {
     </div>
   )
 }
+

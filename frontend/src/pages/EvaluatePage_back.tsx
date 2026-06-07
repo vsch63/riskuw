@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import DocumentUploadPanel from './DocumentUploadPanel'
 import {
   Form, Input, InputNumber, Select, DatePicker,
   Checkbox, Button, Spin, Tooltip, Collapse, Tag, Divider, message, Tabs,
@@ -616,23 +615,19 @@ export default function EvaluatePage() {
 
   // AI Assist state
   const [aiEngine, setAiEngine]     = useState('xgboost')
-  const [ollamaModel, setOllamaModel] = useState('llava-llama3:latest')
   const [aiResult, setAiResult]     = useState<any>(null)
   const [aiLoading, setAiLoading]   = useState(false)
   const [lastPayload, setLastPayload] = useState<any>(null)
 
-  // Load user labels for the selected product's premium formula
+  // Load active user labels for premium formula inputs
   useEffect(() => {
-    if (!selectedCode) return
-    api.get(`/products/${selectedCode}/formula-labels`)
-      .then(r => setUserLabels(Array.isArray(r.data) ? r.data : []))
-      .catch(() => {
-        // Fallback: load all active user labels
-        api.get('/system/user-labels/keys')
-          .then(r => setUserLabels(Array.isArray(r.data) ? r.data : []))
-          .catch(() => setUserLabels([]))
-      })
-  }, [selectedCode])
+    const token = localStorage.getItem('riskuw_token')
+    fetch('/system/user-labels/keys', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }).then(r => r.json()).then(data => {
+      setUserLabels(Array.isArray(data) ? data : [])
+    }).catch(() => {})
+  }, [])
 
   // Watched form values for conditional rendering
   const tobacco    = Form.useWatch('tobacco_status', form) ?? 'NEVER'
@@ -929,37 +924,6 @@ export default function EvaluatePage() {
             </div>
           )}
         </div>
-
-        {/* Document Upload Panel */}
-        <DocumentUploadPanel onExtracted={(fields) => {
-          // Map extracted fields to form field names
-          const formFields: Record<string, any> = {}
-          if (fields.age !== undefined)              formFields.age = fields.age
-          if (fields.gender)                         formFields.gender = fields.gender
-          if (fields.state)                          formFields.state = fields.state
-          if (fields.face_amount !== undefined)      formFields.face_amount = fields.face_amount
-          if (fields.coverage_term_yrs !== undefined) formFields.term_yrs = fields.coverage_term_yrs
-          if (fields.tobacco_status)                 formFields.tobacco_status = fields.tobacco_status
-          if (fields.height_inches !== undefined)    formFields.height_inches = fields.height_inches
-          if (fields.weight_lbs !== undefined)       formFields.weight_lbs = fields.weight_lbs
-          if (fields.systolic_bp !== undefined)      formFields.systolic_bp = fields.systolic_bp
-          if (fields.diastolic_bp !== undefined)     formFields.diastolic_bp = fields.diastolic_bp
-          if (fields.diabetes_type)                  formFields.diabetes_type = fields.diabetes_type
-          if (fields.heart_condition)                formFields.heart_condition = fields.heart_condition
-          if (fields.annual_income !== undefined)    formFields.annual_income = fields.annual_income
-          if (fields.existing_coverage !== undefined) formFields.existing_coverage = fields.existing_coverage
-          if (fields.hiv_positive !== undefined)     formFields.hiv_positive = fields.hiv_positive
-          if (fields.stroke_history !== undefined)   formFields.stroke_history = fields.stroke_history
-          if (fields.kidney_disease !== undefined)   formFields.kidney_disease = fields.kidney_disease
-          if (fields.copd !== undefined)             formFields.copd = fields.copd
-          if (fields.hazardous_activity !== undefined) formFields.hazardous_activity = fields.hazardous_activity
-          if (fields.alcohol_drinks_week !== undefined) formFields.alcohol_drinks_week = fields.alcohol_drinks_week
-          if (fields.a1c !== undefined)              formFields.a1c = fields.a1c
-          if (fields.occupation_title)               formFields.occupation_title = fields.occupation_title
-          if (fields.applicant_ref)                  formFields.applicant_ref = fields.applicant_ref
-          if (fields.product_code)                   formFields.product_code = fields.product_code
-          form.setFieldsValue(formFields)
-        }}/>
 
         {/* Main form */}
         <Form
@@ -1387,14 +1351,14 @@ export default function EvaluatePage() {
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <Select key="ai-engine" value={aiEngine} onChange={setAiEngine} size="small" style={{ flex: 1 }}>
+              <Select value={aiEngine} onChange={setAiEngine} size="small" style={{ flex: 1 }}>
                 <Option value="xgboost">⚡ XGBoost ML (Fast, local)</Option>
                 <Option value="claude">🧠 Claude AI (Anthropic)</Option>
                 <Option value="ollama">🦙 Ollama LLM (Local)</Option>
               </Select>
               {aiEngine === 'ollama' && (
-                <Select key="ollama-model" value={ollamaModel} size="small" style={{ flex: 1 }}
-                  onChange={v => setOllamaModel(v)}>
+                <Select defaultValue="llava-llama3:latest" size="small" style={{ flex: 1 }}
+                  onChange={v => setLastPayload((p: any) => ({ ...p, ollama_model: v }))}>
                   <Option value="llava-llama3:latest">llava-llama3 (8B)</Option>
                   <Option value="llava:latest">llava (7B)</Option>
                   <Option value="minicpm-v:latest">minicpm-v (7.6B)</Option>
@@ -1410,7 +1374,7 @@ export default function EvaluatePage() {
                     const r = await fetch('/underwriting/ai-score', {
                       method: 'POST',
                       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ...lastPayload, engine: aiEngine, ollama_model: ollamaModel }),
+                      body: JSON.stringify({ ...lastPayload, engine: aiEngine }),
                     }).then(r => r.json())
                     setAiResult(r)
                   } catch(e: any) { message.error('AI scoring failed') }

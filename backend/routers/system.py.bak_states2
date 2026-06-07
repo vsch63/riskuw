@@ -239,126 +239,17 @@ def test_smtp_connection(current: CurrentUser):
 # ── state_codes ────────────────────────────────────────────────────────────────
 
 @router.get("/states")
-def list_states(
-    current: CurrentUser,
-    country_code: Optional[str] = None,
-    all: bool = False
-):
-    conn, release = _get_db()
-    try:
-        cur = conn.cursor()
-        where, params = [], []
-        if not all:
-            where.append("is_active=true")
-        if country_code:
-            where.append("country_code=%s")
-            params.append(country_code.upper())
-        sql = "SELECT id, country_code, state_code, state_name, is_active FROM state_codes"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY country_code, state_name"
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        cur.close()
-        return [_row(r) for r in rows]
-    finally:
-        release(conn)
-
-
-@router.post("/states", status_code=201)
-def create_state(body: dict, current: CurrentUser):
-    conn, release = _get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO state_codes (country_code, state_code, state_name, is_active)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (country_code, state_code)
-            DO UPDATE SET state_name=EXCLUDED.state_name, is_active=EXCLUDED.is_active
-            RETURNING id
-        """, (
-            body.get("country_code","IN").upper(),
-            body.get("state_code","").upper(),
-            body.get("state_name",""),
-            body.get("is_active", True),
-        ))
-        conn.commit()
-        row = cur.fetchone()
-        cur.close()
-        return {"id": _row(row).get("id") if row else None, "message": "Saved"}
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(400, str(e))
-    finally:
-        release(conn)
-
-
-@router.put("/states/{state_id}")
-def update_state(state_id: int, body: dict, current: CurrentUser):
+def list_states(current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE state_codes SET state_name=%s, is_active=%s WHERE id=%s",
-            (body.get("state_name"), body.get("is_active", True), state_id)
+            "SELECT id, state_code, state_name, is_active, country_code "
+            "FROM state_codes WHERE is_active=true ORDER BY state_code"
         )
-        conn.commit()
+        rows = cur.fetchall()
         cur.close()
-        return {"message": "Updated"}
-    finally:
-        release(conn)
-
-
-@router.delete("/states/{state_id}")
-def delete_state(state_id: int, current: CurrentUser):
-    conn, release = _get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM state_codes WHERE id=%s", (state_id,))
-        conn.commit()
-        cur.close()
-        return {"message": "Deleted"}
-    finally:
-        release(conn)
-
-
-@router.post("/states/load-preset")
-def load_state_preset(body: dict, current: CurrentUser):
-    country = body.get("country_code", "IN").upper()
-    PRESETS = {
-        "IN": [
-            ("AN","Andaman and Nicobar Islands"),("AP","Andhra Pradesh"),
-            ("AR","Arunachal Pradesh"),("AS","Assam"),("BR","Bihar"),
-            ("CH","Chandigarh"),("CT","Chhattisgarh"),("DL","Delhi"),
-            ("DN","Dadra and Nagar Haveli and Daman and Diu"),("GA","Goa"),
-            ("GJ","Gujarat"),("HR","Haryana"),("HP","Himachal Pradesh"),
-            ("JK","Jammu and Kashmir"),("JH","Jharkhand"),("KA","Karnataka"),
-            ("KL","Kerala"),("LA","Ladakh"),("LD","Lakshadweep"),
-            ("MP","Madhya Pradesh"),("MH","Maharashtra"),("MN","Manipur"),
-            ("ML","Meghalaya"),("MZ","Mizoram"),("NL","Nagaland"),
-            ("OR","Odisha"),("PY","Puducherry"),("PB","Punjab"),
-            ("RJ","Rajasthan"),("SK","Sikkim"),("TN","Tamil Nadu"),
-            ("TG","Telangana"),("TR","Tripura"),("UP","Uttar Pradesh"),
-            ("UT","Uttarakhand"),("WB","West Bengal"),
-        ],
-    }
-    states = PRESETS.get(country, [])
-    if not states:
-        raise HTTPException(400, f"No preset available for {country}")
-    conn, release = _get_db()
-    try:
-        cur = conn.cursor()
-        inserted = 0
-        for code, name in states:
-            cur.execute("""
-                INSERT INTO state_codes (country_code, state_code, state_name, is_active)
-                VALUES (%s,%s,%s,true)
-                ON CONFLICT (country_code, state_code) DO NOTHING
-            """, (country, code, name))
-            inserted += cur.rowcount
-        conn.commit()
-        cur.close()
-        return {"message": f"Loaded {inserted} state codes for {country}"}
+        return [_row(r) for r in rows]
     finally:
         release(conn)
 

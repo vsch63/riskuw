@@ -17,6 +17,7 @@ import OutputInterfacePage from './pages/OutputInterfacePage'
 import AuditLogPage from './pages/AuditLogPage'
 import MembersPage from './pages/MembersPage'
 import DebitScalePage from './pages/DebitScalePage'
+import MyAccountPage from './pages/MyAccountPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user)
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="output-interface" element={<OutputInterfacePage />} />
           <Route path="audit"   element={<AuditLogPage />} />
           <Route path="members" element={<MembersPage />} />
+          <Route path="/my-account" element={<MyAccountPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
