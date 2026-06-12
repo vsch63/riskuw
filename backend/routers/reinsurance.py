@@ -115,18 +115,16 @@ def get_stats(current: CurrentUser):
         cur.execute("""
             SELECT
                 COUNT(*)                                                        AS total_flagged,
-                COUNT(*) FILTER(WHERE ri.id IS NULL)                            AS pending_submission,
+                COUNT(*) FILTER(WHERE ri.status='PENDING_SUBMISSION')           AS pending_submission,
                 COUNT(*) FILTER(WHERE ri.status='SUBMITTED')                    AS submitted,
                 COUNT(*) FILTER(WHERE ri.status='DECISION_RECEIVED'
                                   AND ri.ri_decision='ACCEPTED')                AS accepted,
                 COUNT(*) FILTER(WHERE ri.status='DECISION_RECEIVED'
                                   AND ri.ri_decision='DECLINED')                AS ri_declined,
-                COALESCE(SUM(COALESCE(c.face_amount, 0)), 0)                   AS total_exposure,
+                COALESCE(SUM(ri.gross_face_amount), 0)                          AS total_exposure,
                 COALESCE(SUM(ri.ceded_amount), 0)                               AS total_ceded,
                 COALESCE(SUM(ri.ri_premium), 0)                                 AS total_ri_prem
-            FROM uw_case c
-            LEFT JOIN ri_cession ri  ON ri.case_id = c.id::text
-            WHERE COALESCE(c.reinsurance_required, FALSE) = TRUE
+            FROM ri_cession ri
         """)
         row = cur.fetchone()
         cur.close()
@@ -157,30 +155,21 @@ def get_ri_cases(current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        # Try full join first, fall back to simpler query if columns missing
-        try:
-            cur.execute("SELECT 1 FROM uw_decision LIMIT 0")
-            has_uw_decision = True
-        except Exception:
-            conn.rollback()
-            has_uw_decision = False
         cur.execute("""
             SELECT
-                c.id::text                          AS case_id,
-                c.case_number,
-                c.status                            AS case_status,
-                COALESCE(a.applicant_ref, '')       AS applicant_ref,
-                COALESCE(c.face_amount, 0)          AS face_amount,
-                COALESCE(c.product_code, '')        AS product_code,
-                COALESCE(c.applicant_age, 0)        AS age,
-                COALESCE(am.gender, '')             AS gender,
-                COALESCE(d.outcome, '')             AS outcome,
-                COALESCE(d.approved_premium, 0)     AS approved_premium,
-                COALESCE(d.risk_class, '')          AS risk_class,
-                COALESCE(d.table_rating, 0)         AS table_rating,
-                COALESCE(d.flat_extra_per_thou, 0)  AS flat_extra,
-                COALESCE(d.net_debit_points, 0)     AS net_debit_points,
-                COALESCE(am.full_name, a.applicant_ref, '') AS applicant_name,
+                ri.case_id                          AS case_id,
+                COALESCE(pq.applicant_ref, '')      AS applicant_ref,
+                COALESCE(pq.product_code, '')       AS product_code,
+                COALESCE(pq.face_amount, ri.gross_face_amount, 0) AS face_amount,
+                COALESCE(pq.age, 0)                 AS age,
+                COALESCE(pq.gender, '')             AS gender,
+                COALESCE(pq.outcome, '')            AS outcome,
+                COALESCE(pq.approved_premium, ri.gross_premium, 0) AS approved_premium,
+                COALESCE(pq.risk_class, '')         AS risk_class,
+                0                                    AS table_rating,
+                0                                    AS flat_extra,
+                COALESCE(pq.net_debit_points, 0)    AS net_debit_points,
+                COALESCE(pq.applicant_ref, '')      AS applicant_name,
                 ri.id::text                         AS cession_id,
                 ri.cession_ref,
                 COALESCE(ri.status, 'NOT_SUBMITTED') AS ri_status,
@@ -189,18 +178,12 @@ def get_ri_cases(current: CurrentUser):
                 COALESCE(ri.ri_premium, 0)          AS ri_premium,
                 COALESCE(ri.ri_decision, '')        AS ri_decision,
                 COALESCE(rr.reinsurer_name, '')     AS reinsurer_name
-            FROM uw_case c
-            LEFT JOIN application a       ON a.id = c.application_id
-            LEFT JOIN uw_decision d       ON d.case_id = c.id::text
-                                         AND d.is_final = TRUE
-                                         AND COALESCE(d.is_deleted, FALSE) = FALSE
-            LEFT JOIN applicant_master am ON am.applicant_ref = a.applicant_ref
-            LEFT JOIN ri_cession ri       ON ri.case_id = c.id::text
-            LEFT JOIN ri_reinsurer rr     ON rr.id = ri.reinsurer_id
-            WHERE COALESCE(c.reinsurance_required, FALSE) = TRUE
+            FROM ri_cession ri
+            LEFT JOIN policy_admin_queue pq ON pq.id::text = ri.case_id
+            LEFT JOIN ri_reinsurer rr       ON rr.id = ri.reinsurer_id
             ORDER BY
-                CASE WHEN ri.id IS NULL THEN 0 ELSE 1 END,
-                c.face_amount DESC NULLS LAST
+                CASE WHEN ri.status='PENDING_SUBMISSION' THEN 0 ELSE 1 END,
+                ri.gross_face_amount DESC NULLS LAST
         """)
         rows = cur.fetchall()
         cur.close()
@@ -223,43 +206,7 @@ def get_ri_cases(current: CurrentUser):
             result.append(d)
         return result
     except Exception as e:
-        # If the detailed query fails, return basic case info
-        try:
-            conn.rollback()
-            cur2 = conn.cursor()
-            cur2.execute("""
-                SELECT c.id::text, c.case_number, c.status,
-                       COALESCE(c.face_amount, 0), COALESCE(c.product_code, ''),
-                       COALESCE(c.applicant_age, 0),
-                       ri.id::text, ri.cession_ref,
-                       COALESCE(ri.status, 'NOT_SUBMITTED'),
-                       ri.reinsurer_id::text,
-                       COALESCE(ri.ceded_amount, 0), COALESCE(ri.ri_premium, 0),
-                       COALESCE(ri.ri_decision, ''),
-                       COALESCE(rr.reinsurer_name, '')
-                FROM uw_case c
-                LEFT JOIN ri_cession ri   ON ri.case_id = c.id::text
-                LEFT JOIN ri_reinsurer rr ON rr.id = ri.reinsurer_id
-                WHERE COALESCE(c.reinsurance_required, FALSE) = TRUE
-                ORDER BY CASE WHEN ri.id IS NULL THEN 0 ELSE 1 END
-            """)
-            rows2 = cur2.fetchall()
-            cur2.close()
-            return [{
-                "case_id": str(r[0] or ""), "case_number": r[1] or "",
-                "case_status": r[2] or "", "applicant_ref": "",
-                "face_amount": float(r[3] or 0), "product_code": r[4] or "",
-                "age": int(r[5] or 0), "gender": "", "outcome": "",
-                "approved_premium": 0, "risk_class": "", "table_rating": 0,
-                "flat_extra": 0, "net_debit_points": 0, "applicant_name": "",
-                "cession_id": str(r[6]) if r[6] else None,
-                "cession_ref": r[7] or "", "ri_status": r[8] or "NOT_SUBMITTED",
-                "reinsurer_id": str(r[9]) if r[9] else None,
-                "ceded_amount": float(r[10] or 0), "ri_premium": float(r[11] or 0),
-                "ri_decision": r[12] or "", "reinsurer_name": r[13] or "",
-            } for r in rows2]
-        except Exception as e2:
-            raise HTTPException(500, f"Failed to load RI cases: {e} | fallback: {e2}")
+        raise HTTPException(500, f"Failed to load RI cases: {e}")
     finally:
         release(conn)
 
@@ -387,7 +334,8 @@ def list_cessions(current: CurrentUser):
             SELECT
                 ri.id::text             AS cession_id,
                 ri.cession_ref,
-                c.case_number,
+                ri.case_id,
+                COALESCE(pq.applicant_ref, ri.case_id) AS case_number,
                 rr.reinsurer_name,
                 ri.cession_type,
                 ri.status,
@@ -404,8 +352,8 @@ def list_cessions(current: CurrentUser):
                 ri.cession_effective_date,
                 ri.cession_expiry_date
             FROM ri_cession ri
-            LEFT JOIN uw_case c      ON c.id::text = ri.case_id
-            LEFT JOIN ri_reinsurer rr ON rr.id = ri.reinsurer_id
+            LEFT JOIN policy_admin_queue pq ON pq.id::text = ri.case_id
+            LEFT JOIN ri_reinsurer rr        ON rr.id = ri.reinsurer_id
             ORDER BY ri.created_at DESC
             LIMIT 200
         """)
@@ -432,10 +380,15 @@ def create_cession(body: CessionCreate, current: CurrentUser):
     try:
         cur = conn.cursor()
 
-        # Get application_id from case
-        cur.execute("SELECT application_id FROM uw_case WHERE id::text=%s", (body.case_id,))
-        row = cur.fetchone()
-        app_id = str(row["application_id"]) if row else None
+        # Get application_id from case (uw_case is legacy; ok if not found)
+        app_id = None
+        try:
+            cur.execute("SELECT application_id FROM uw_case WHERE id::text=%s", (body.case_id,))
+            row = cur.fetchone()
+            app_id = str(row["application_id"]) if row else None
+        except Exception:
+            conn.rollback()
+            cur = conn.cursor()
 
         # Get treaty_code from reinsurer
         cur.execute("SELECT treaty_code FROM ri_reinsurer WHERE id::text=%s", (body.reinsurer_id,))

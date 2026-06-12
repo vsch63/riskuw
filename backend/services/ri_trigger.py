@@ -1,0 +1,166 @@
+"""
+backend/services/ri_trigger.py
+───────────────────────────────
+Checks if a UW decision triggers reinsurance and creates ri_cession records.
+
+Called after every APPROVED decision in:
+  - routers/underwriting.py  (_persist_to_queue)
+  - routers/batch.py         (_fallback_process)
+
+Logic:
+  1. Find active reinsurers whose product_codes include this product
+  2. Check if face_amount > retention_limit
+  3. If yes, create ri_cession record with PENDING_SUBMISSION status
+  4. Returns True if cession was created
+"""
+from __future__ import annotations
+import logging
+
+logger = logging.getLogger("uw_platform")
+
+
+def check_and_trigger_reinsurance(
+    conn,
+    case_id: str,
+    application_id: str | None,
+    product_code: str,
+    face_amount: float,
+    approved_premium: float | None,
+    applicant_ref: str,
+    submitted_by: str = "system",
+) -> dict:
+    """
+    Check if this case requires reinsurance and create cession if so.
+
+    Returns:
+        {
+            "triggered": bool,
+            "cession_ref": str | None,
+            "reinsurer_name": str | None,
+            "ceded_amount": float | None,
+            "retention_amount": float | None,
+        }
+    """
+    result = {
+        "triggered": False,
+        "cession_ref": None,
+        "reinsurer_name": None,
+        "ceded_amount": None,
+        "retention_amount": None,
+    }
+
+    if not face_amount or face_amount <= 0:
+        return result
+
+    try:
+        cur = conn.cursor()
+
+        # Find active reinsurers covering this product
+        cur.execute("""
+            SELECT id, reinsurer_name, reinsurer_code, treaty_code,
+                   treaty_type, retention_limit, currency,
+                   treaty_effective_date, treaty_expiry_date
+            FROM ri_reinsurer
+            WHERE is_active = true
+              AND %s = ANY(product_codes)
+              AND (treaty_expiry_date IS NULL OR treaty_expiry_date >= CURRENT_DATE)
+              AND (treaty_effective_date IS NULL OR treaty_effective_date <= CURRENT_DATE)
+            ORDER BY retention_limit ASC
+            LIMIT 1
+        """, (product_code,))
+
+        reinsurer = cur.fetchone()
+        if not reinsurer:
+            cur.close()
+            return result
+
+        ri = dict(reinsurer) if hasattr(reinsurer, "keys") else dict(zip([
+            "id", "reinsurer_name", "reinsurer_code", "treaty_code",
+            "treaty_type", "retention_limit", "currency",
+            "treaty_effective_date", "treaty_expiry_date"
+        ], reinsurer))
+
+        retention_limit = float(ri.get("retention_limit") or 0)
+
+        # Check if face amount exceeds retention limit
+        if face_amount <= retention_limit:
+            cur.close()
+            return result
+
+        # Reinsurance triggered — calculate amounts
+        retention_amount = retention_limit
+        ceded_amount     = face_amount - retention_limit
+        treaty_type      = ri.get("treaty_type", "FACULTATIVE")
+
+        # Calculate RI premium proportionally if known
+        ri_premium           = None
+        net_retained_premium = None
+        if approved_premium and approved_premium > 0 and face_amount > 0:
+            ceded_ratio          = ceded_amount / face_amount
+            ri_premium           = round(approved_premium * ceded_ratio, 2)
+            net_retained_premium = round(approved_premium - ri_premium, 2)
+
+        # Create cession record
+        cur.execute("""
+            INSERT INTO ri_cession (
+                case_id, application_id, reinsurer_id, treaty_code,
+                status, cession_type,
+                gross_face_amount, retention_amount, ceded_amount,
+                gross_premium, ri_premium, net_retained_premium,
+                submitted_by, notes, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s,
+                'PENDING_SUBMISSION', %s,
+                %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, now(), now()
+            )
+            RETURNING cession_ref
+        """, (
+            case_id,
+            application_id,
+            ri["id"],
+            ri.get("treaty_code"),
+            treaty_type,
+            face_amount,
+            retention_amount,
+            ceded_amount,
+            approved_premium,
+            ri_premium,
+            net_retained_premium,
+            submitted_by,
+            f"Auto-triggered: {applicant_ref} | {product_code} | "
+            f"SA ₹{face_amount:,.0f} > Retention ₹{retention_limit:,.0f}",
+        ))
+        cession_row = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        cession_ref = (
+            dict(cession_row).get("cession_ref")
+            if hasattr(cession_row, "keys")
+            else cession_row[0]
+        ) if cession_row else None
+
+        logger.info(
+            f"RI cession created: {cession_ref} | {applicant_ref} | "
+            f"{product_code} | SA ₹{face_amount:,.0f} | "
+            f"Ceded ₹{ceded_amount:,.0f} to {ri['reinsurer_name']}"
+        )
+
+        result.update({
+            "triggered":        True,
+            "cession_ref":      cession_ref,
+            "reinsurer_name":   ri["reinsurer_name"],
+            "ceded_amount":     ceded_amount,
+            "retention_amount": retention_amount,
+        })
+        return result
+
+    except Exception as e:
+        logger.error(f"RI trigger failed for {applicant_ref}: {e}", exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return result

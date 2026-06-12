@@ -29,7 +29,7 @@ const { TextArea } = Input
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface RICase {
-  case_id: string; case_number: string; case_status: string
+  case_id: string; case_status?: string
   applicant_ref: string; applicant_name: string
   face_amount: number; product_code: string; age: number; gender: string
   outcome: string; approved_premium: number; risk_class: string
@@ -51,7 +51,7 @@ interface Stats {
   total_exposure: number; total_ceded: number; total_ri_prem: number
 }
 interface Cession {
-  cession_ref: string; case_number: string; reinsurer_name: string
+  cession_ref: string; case_id?: string; case_number: string; reinsurer_name: string
   cession_type: string; status: string; ri_decision: string
   gross_face_amount: number; ceded_amount: number
   gross_premium: number; ri_premium: number; net_retained_premium: number
@@ -203,7 +203,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
         <div key={c.case_id} style={{ ...card, cursor:'pointer' }} onClick={() => setExpanded(expanded===c.case_id?null:c.case_id)}>
           <div style={{ display:'flex', alignItems:'center', gap:10 }}>
             <span style={{ fontSize:16 }}>{RI_STATUS_ICON[c.ri_status]||'⚪'}</span>
-            <strong style={{ color:'#e2e8f0', fontFamily:'var(--font-mono,monospace)', fontSize:13 }}>{c.case_number}</strong>
+            <strong style={{ color:'#e2e8f0', fontFamily:'var(--font-mono,monospace)', fontSize:13 }}>{c.applicant_ref || c.cession_ref || c.case_id}</strong>
             <span style={{ color:'#6b7280', fontSize:13 }}>— {fmt(c.face_amount)}</span>
             <Tag style={{ fontFamily:'var(--font-mono,monospace)', fontSize:11 }}>{c.product_code}</Tag>
             {c.outcome && <Tag color="blue" style={{ fontSize:11 }}>{c.outcome}</Tag>}
@@ -263,7 +263,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
                       ))}
                     </div>
                   )}
-                  {c.ri_status === 'SLIP_GENERATED' && (
+                  {(c.ri_status === 'SLIP_GENERATED' || c.ri_status === 'PENDING_SUBMISSION' || c.ri_status === 'NOT_SUBMITTED') && (
                     <Button type="primary" icon={<SendOutlined/>} onClick={() => markSubmitted(c)}>
                       📤 Mark as Submitted to Reinsurer
                     </Button>
@@ -295,7 +295,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
       )}
 
       {/* Submit Cession Modal */}
-      <Modal title={<span style={{ color:'#e2e8f0' }}>Submit Cession — {submitModal?.case_number}</span>}
+      <Modal title={<span style={{ color:'#e2e8f0' }}>Submit Cession — {submitModal?.applicant_ref || submitModal?.cession_ref || submitModal?.case_id}</span>}
         open={!!submitModal} onCancel={() => setSubModal(null)} footer={null} width={600}
         styles={{ content:{ background:'#0d1521', border:'1px solid rgba(255,255,255,0.09)' }, header:{ background:'#0d1521' } }}>
         {submitModal && (
@@ -356,7 +356,7 @@ function RIQueueTab({ cases, reinsurers, onRefresh }: {
       </Modal>
 
       {/* Record Decision Modal */}
-      <Modal title={<span style={{ color:'#e2e8f0' }}>Record RI Decision — {decModal?.case_number}</span>}
+      <Modal title={<span style={{ color:'#e2e8f0' }}>Record RI Decision — {decModal?.applicant_ref || decModal?.cession_ref || decModal?.case_id}</span>}
         open={!!decModal} onCancel={() => setDecModal(null)} footer={null} width={520}
         styles={{ content:{ background:'#0d1521', border:'1px solid rgba(255,255,255,0.09)' }, header:{ background:'#0d1521' } }}>
         {decModal && (
@@ -421,6 +421,14 @@ function GenerateSlipTab({ cases, reinsurers, onRefresh }: {
     }
   }, [riSel, ri, c?.case_id])
 
+  // Pre-fill RI premium from existing cession if already calculated
+  useEffect(() => {
+    if (c) {
+      setRiPrem(c.ri_premium || 0)
+      if (c.ceded_amount) setCeded(c.ceded_amount)
+    }
+  }, [c?.case_id])
+
   useEffect(() => {
     if (!riSel && reinsurers.length > 0) setRiSel(reinsurers[0].id)
   }, [reinsurers])
@@ -434,7 +442,7 @@ function GenerateSlipTab({ cases, reinsurers, onRefresh }: {
     </div>
     <div style="text-align:right;font-size:12px;color:#6b7280;">
       <div><b>Slip date:</b> ${slipDate}</div>
-      <div><b>Case ref:</b> ${c.case_number}</div>
+      <div><b>Applicant ref:</b> ${c.applicant_ref}</div>
       <div><b>Treaty:</b> ${treaty||'—'}</div>
       <div><b>Cover from:</b> ${effDate||'—'}</div>
       <div><b>Cover to:</b> ${expDate||'Per policy term'}</div>
@@ -465,7 +473,7 @@ function GenerateSlipTab({ cases, reinsurers, onRefresh }: {
       const blob = new Blob([slipHTML], { type:'text/html' })
       const url  = URL.createObjectURL(blob)
       const a    = document.createElement('a')
-      a.href = url; a.download = `ri_slip_${c.case_number}_${slipDate}.html`; a.click()
+      a.href = url; a.download = `ri_slip_${c.applicant_ref || c.case_id}_${slipDate}.html`; a.click()
       URL.revokeObjectURL(url)
       // Mark slip as generated
       await riApi.post('/reinsurance/slips', {
@@ -489,7 +497,7 @@ function GenerateSlipTab({ cases, reinsurers, onRefresh }: {
         <Select value={selCase||undefined} onChange={v => { setSelCase(v); const cs = cases.find(x => x.case_id===v); if (cs && ri) setCeded(Math.max(0, cs.face_amount - (ri.retention_limit||0))) }}
           style={{ width:'100%' }} placeholder="Select a case..." showSearch
           optionFilterProp="label"
-          options={cases.map(c => ({ value:c.case_id, label:`${c.case_number} | ${fmt(c.face_amount)} | ${c.product_code} | ${c.outcome||'Pending'}` }))}/>
+          options={cases.map(c => ({ value:c.case_id, label:`${c.applicant_ref || c.cession_ref || c.case_id} | ${fmt(c.face_amount)} | ${c.product_code} | ${c.outcome||'Pending'}` }))}/>
       </div>
 
       {c && (
@@ -810,7 +818,7 @@ function CessionHistoryTab() {
 
   const cols = [
     { title:'Cession ref', dataIndex:'cession_ref', width:160, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontSize:12 }}>{v||'—'}</span> },
-    { title:'Case', dataIndex:'case_number', width:160 },
+    { title:'Applicant Ref', dataIndex:'case_number', width:160 },
     { title:'Reinsurer', dataIndex:'reinsurer_name' },
     { title:'Type', dataIndex:'cession_type', width:110 },
     { title:'Status', dataIndex:'status', width:160, render:(v:string) => <Tag style={{ background:RI_STATUS_COLOR[v]||'#6b7280', color:'#fff', border:'none', fontSize:11 }}>{v}</Tag> },
@@ -916,4 +924,5 @@ export default function ReinsurancePage() {
     </div>
   )
 }
+
 

@@ -210,7 +210,79 @@ def _post_process(extracted: dict) -> dict:
     return result
 
 
-# ── Endpoint ─────────────────────────────────────────────────────────────────
+
+# ── Batch PDF extraction endpoint ────────────────────────────────────────────
+@router.post("/underwriting/extract-documents-batch")
+async def extract_documents_batch(files: list[UploadFile] = File(...)):
+    """
+    Extract UW fields from multiple uploaded PDFs/images.
+    Returns a list of extracted field sets, one per file.
+    Used by the PDF Batch Upload tab in Batch Jobs.
+    """
+    if not files:
+        raise HTTPException(400, "No files uploaded")
+    if len(files) > 50:
+        raise HTTPException(400, "Maximum 50 files per batch")
+
+    results = []
+    for file in files:
+        filename = (file.filename or "").lower()
+        file_bytes = await file.read()
+
+        result = {
+            "filename":    file.filename,
+            "status":      "pending",
+            "extracted":   {},
+            "error":       None,
+            "char_count":  0,
+            "fields_found": 0,
+        }
+
+        try:
+            if not file_bytes:
+                raise ValueError("Empty file")
+            if len(file_bytes) > 10 * 1024 * 1024:
+                raise ValueError("File too large — max 10MB")
+
+            if filename.endswith(".pdf"):
+                raw_text = _extract_text_from_pdf(file_bytes)
+            elif filename.endswith((".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp")):
+                raw_text = _extract_text_from_image(file_bytes)
+            else:
+                raise ValueError("Unsupported file type — use PDF, JPG, or PNG")
+
+            if not raw_text or len(raw_text.strip()) < 20:
+                raise ValueError("Could not extract readable text")
+
+            extracted = _call_claude(raw_text)
+            cleaned   = _post_process(extracted)
+
+            result["status"]       = "success"
+            result["extracted"]    = cleaned
+            result["char_count"]   = len(raw_text)
+            result["fields_found"] = len(cleaned)
+
+        except HTTPException as e:
+            result["status"] = "error"
+            result["error"]  = e.detail
+        except Exception as e:
+            result["status"] = "error"
+            result["error"]  = str(e)
+
+        results.append(result)
+        logger.info(f"Batch OCR: {file.filename} -> {result['status']} ({result.get('fields_found',0)} fields)")
+
+    successful = sum(1 for r in results if r["status"] == "success")
+    failed     = sum(1 for r in results if r["status"] == "error")
+
+    return {
+        "total":      len(results),
+        "successful": successful,
+        "failed":     failed,
+        "results":    results,
+    }
+
+# ── Single file endpoint ─────────────────────────────────────────────────────
 @router.post("/underwriting/extract-document")
 async def extract_document(file: UploadFile = File(...)):
     """

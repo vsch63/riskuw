@@ -6,9 +6,10 @@ import {
 } from 'antd'
 import {
   UploadOutlined, ReloadOutlined, DownloadOutlined,
-  BarChartOutlined, CalendarOutlined,
+  BarChartOutlined, CalendarOutlined, FileTextOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import PdfBatchUploadTab from './PdfBatchUploadTab'
 
 const { Option } = Select
 const { Dragger } = Upload
@@ -798,6 +799,11 @@ export default function BatchJobsPage() {
   }
 
   const tabs = [
+    {
+      key: 'pdf_batch',
+      label: <span><FileTextOutlined/> PDF Batch</span>,
+      children: <PdfBatchUploadTab onSubmitted={handleSubmitted}/>,
+    },
     {
       key: 'upload',
       label: <span><UploadOutlined/> Upload Batch</span>,

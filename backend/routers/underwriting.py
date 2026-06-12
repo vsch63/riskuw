@@ -322,7 +322,7 @@ def evaluate(body: EvaluateRequest, current: CurrentUser):
         _cur  = _conn.cursor()
         # Look up applicant email from member master
         _cur.execute(
-            "SELECT email, name FROM applicant_master WHERE applicant_ref = %s LIMIT 1",
+            "SELECT email, full_name AS name FROM applicant_master WHERE applicant_ref = %s LIMIT 1",
             (body.applicant_ref,)
         )
         member = _cur.fetchone()
@@ -589,6 +589,7 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                  outcome, risk_class, net_debit_points, approved_premium,
                  decision_date, source, status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ONLINE', 'UNPROCESSED')
+            RETURNING id
             """,
             (
                 body.applicant_ref, body.product_code, body.face_amount,
@@ -598,8 +599,35 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                 result.get("approved_premium"),
             ),
         )
+        row      = cur.fetchone()
+        case_id  = str(dict(row).get("id") if hasattr(row, "keys") else row[0]) if row else body.applicant_ref
         conn.commit()
         cur.close()
+
+        # ── Reinsurance trigger ───────────────────────────────────────────────
+        outcome = result.get("outcome", "")
+        if "APPROVED" in outcome:
+            try:
+                from services.ri_trigger import check_and_trigger_reinsurance
+                ri = check_and_trigger_reinsurance(
+                    conn=conn,
+                    case_id=case_id,
+                    application_id=body.applicant_ref,
+                    product_code=body.product_code,
+                    face_amount=float(body.face_amount or 0),
+                    approved_premium=float(result.get("approved_premium") or 0),
+                    applicant_ref=body.applicant_ref,
+                    submitted_by=current.username,
+                )
+                if ri["triggered"]:
+                    logger.info(
+                        f"RI triggered for {body.applicant_ref}: "
+                        f"{ri['cession_ref']} — ceded ₹{ri['ceded_amount']:,.0f} "
+                        f"to {ri['reinsurer_name']}"
+                    )
+            except Exception as ri_err:
+                logger.warning(f"RI trigger failed for {body.applicant_ref}: {ri_err}")
+
     except Exception as e:
         logger.warning(f"_persist_to_queue failed: {e}", exc_info=True)
         # queue write failure must never break the decision response

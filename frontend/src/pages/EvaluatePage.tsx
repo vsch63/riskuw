@@ -1501,7 +1501,7 @@ export default function EvaluatePage() {
     {
       key: 'platform',
       label: <span>📈 Platform Analytics</span>,
-      children: <div style={{ padding: '24px 32px' }}><PlatformAnalyticsTab/></div>,
+      children: <div style={{ padding: '24px 32px', overflowY: 'auto', height: 'calc(100vh - 160px)' }}><PlatformAnalyticsTab/></div>,
     },
   ]
 

@@ -178,11 +178,13 @@ export function PlatformAnalyticsTab() {
   const today   = new Date().toISOString().slice(0,10)
   const month30 = new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0,10)
 
-  const [dateFrom, setFrom]   = useState(month30)
+  const [dateFrom, setFrom]   = useState('2000-01-01')
   const [dateTo, setTo]       = useState(today)
   const [data, setData]       = useState<AnalyticsData|null>(null)
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded]   = useState(false)
+
+  useEffect(() => { load() }, [])
 
   const load = async () => {
     setLoading(true)
@@ -190,6 +192,7 @@ export function PlatformAnalyticsTab() {
       const r = await api.get('/analytics/summary', {
         params: { date_from: dateFrom, date_to: dateTo }
       })
+      console.log('ANALYTICS DATA:', JSON.stringify(r.data?.outcomes))
       setData(r.data)
     } catch(e:any) {
       // Try alternative endpoint

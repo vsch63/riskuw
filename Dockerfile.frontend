@@ -21,7 +21,7 @@ RUN npm ci --frozen-lockfile
 
 # Copy source and build
 # VITE_API_BASE is injected at build time via --build-arg
-ARG VITE_API_BASE=https://riskuw.online
+ARG VITE_API_BASE=
 ENV VITE_API_BASE=$VITE_API_BASE
 
 COPY frontend/ ./

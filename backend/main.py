@@ -131,6 +131,7 @@ from routers.gst_modal        import router as gst_modal_router
 from routers.members          import router as members_router    # ← NEW
 from routers.user_labels      import router as user_labels_router        # ← NEW
 from routers.ocr_extract      import router as ocr_router                   # ← OCR
+from routers.analytics        import router as analytics_router             # ← ANALYTICS
 
 app.include_router(auth_router)
 app.include_router(products_router)
@@ -159,6 +160,7 @@ except ImportError:
     logger.warning("routers/reinsurance.py not found — RI endpoints disabled")
 
 app.include_router(ocr_router)
+app.include_router(analytics_router)
 
 
 # ── Global exception handler ──────────────────────────────────────────────────

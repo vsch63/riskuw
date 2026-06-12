@@ -489,6 +489,23 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                     premium      = prem_result["premium"]
                     premium_note = prem_result["premium_note"]
 
+                # ── Reinsurance trigger ───────────────────────────────────────
+                if not dry_run and "APPROVED" in outcome:
+                    try:
+                        from services.ri_trigger import check_and_trigger_reinsurance
+                        check_and_trigger_reinsurance(
+                            conn=conn,
+                            case_id=f"BATCH-{job_id[:8]}-{i}",
+                            application_id=payload.get("applicant_ref", ""),
+                            product_code=product_code,
+                            face_amount=float(payload.get("face_amount") or 0),
+                            approved_premium=premium,
+                            applicant_ref=payload.get("applicant_ref", ""),
+                            submitted_by=username,
+                        )
+                    except Exception as ri_err:
+                        _logger.warning(f"RI trigger failed for row {i}: {ri_err}")
+
                 # ── AI Scoring (if engine selected) ──────────────────────────
                 ai_decision  = None
                 ai_risk_tier = None
