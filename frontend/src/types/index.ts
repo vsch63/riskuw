@@ -24,6 +24,7 @@ export interface MFAVerifyRequest {
 export interface AuthUser {
   username: string;
   role: string;
+  full_name?: string;
   token: string;
   tenant_id: string;
   tenant_name?: string;

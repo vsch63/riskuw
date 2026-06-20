@@ -16,6 +16,7 @@ const NAV_MAIN = [
   { key: '/evaluate',    icon: <ThunderboltOutlined />,   label: 'Evaluate',    badge: 'DEMO' },
   { key: '/queue',       icon: <InboxOutlined />,         label: 'UW Queue' },
   { key: '/cases',       icon: <UnorderedListOutlined />, label: 'Cases' },
+  { key: '/members',     icon: <UserOutlined />,          label: 'Members' },
   { key: '/batch',       icon: <UploadOutlined />,        label: 'Batch' },
   { key: '/reinsurance', icon: <SwapOutlined />,          label: 'Reinsurance' },
 ]
@@ -140,7 +141,12 @@ export default function AppLayout() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10,
             padding: '8px 10px', borderRadius: 8,
-            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
+            cursor: 'pointer' }}
+            onClick={() => navigate('/my-account')}
+            onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.08)')}
+            onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)')}
+          >
             <Badge dot status="success" offset={[-2, 28]} style={{ backgroundColor: '#22c55e' }}>
               <Avatar size={32} style={{ background: 'rgba(0,212,170,0.15)',
                 color: 'var(--teal-400)', fontSize: 13, fontWeight: 600, flexShrink: 0 }}

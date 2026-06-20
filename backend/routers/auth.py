@@ -100,7 +100,7 @@ async def login(body: LoginRequest, request: Request):
 
         # Fetch user — accept both username and email (industry standard)
         cur.execute(
-            "SELECT u.username, u.hashed_password, u.role, u.is_active, "
+            "SELECT u.username, u.hashed_password, u.role, u.is_active, u.full_name, "
             "u.tenant_id::text, t.tenant_name "
             "FROM uw_user u LEFT JOIN tenant t ON t.id = u.tenant_id "
             "WHERE u.username = %s AND u.is_deleted = false",
@@ -111,7 +111,7 @@ async def login(body: LoginRequest, request: Request):
         # Fallback: try email lookup if username not found
         if not user and "@" in (body.username or ""):
             cur.execute(
-                "SELECT u.username, u.hashed_password, u.role, u.is_active, "
+                "SELECT u.username, u.hashed_password, u.role, u.is_active, u.full_name, "
                 "u.tenant_id::text, t.tenant_name "
                 "FROM uw_user u LEFT JOIN tenant t ON t.id = u.tenant_id "
                 "WHERE u.email = %s AND u.is_deleted = false",
@@ -180,6 +180,7 @@ async def login(body: LoginRequest, request: Request):
             access_token=token,
             username=body.username,
             role=user_dict["role"],
+            full_name=user_dict.get("full_name"),
             tenant_id=user_dict.get("tenant_id"),
             tenant_name=user_dict.get("tenant_name"),
         )

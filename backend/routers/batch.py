@@ -513,7 +513,7 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                 ai_narrative = None
                 if not dry_run and ai_engine and ai_engine != "rules_only":
                     try:
-                        from services.ai_score import get_ai_score
+                        from services.ai_score import get_ai_score, log_ai_decision
                         ai_payload = {
                             **payload,
                             "uw_outcome":      outcome,
@@ -526,6 +526,18 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                             ai_risk_tier  = ai_result.get("risk_tier")
                             ai_risk_score = ai_result.get("risk_score")
                             ai_narrative  = ai_result.get("narrative")
+
+                            # AI Audit Trail
+                            log_ai_decision(
+                                conn,
+                                ai_result=ai_result,
+                                input_payload=ai_payload,
+                                source="BATCH",
+                                job_id=job_id,
+                                applicant_ref=payload.get("applicant_ref", ""),
+                                product_code=product_code,
+                                requested_by=username,
+                            )
                     except Exception as ai_err:
                         _logger.warning(f"AI scoring failed for row {i}: {ai_err}")
 
@@ -686,6 +698,53 @@ def cancel_job(job_id: str, current: CurrentUser):
 
 
 @router.get("/jobs/{job_id}/download/{type}")
+@router.get("/jobs/{job_id}/records")
+def get_job_records(
+    job_id: str,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, le=200),
+    outcome: str = Query(default=""),
+    current: CurrentUser = None,
+):
+    """Get individual records for a batch job with pagination."""
+    db, release = _jobs_db()
+    try:
+        import psycopg2.extras
+        db.cursor_factory = psycopg2.extras.RealDictCursor
+        cur = db.cursor()
+        offset = (page - 1) * per_page
+        outcome_filter = ""
+        params = [job_id]
+        if outcome:
+            outcome_filter = "AND outcome ILIKE %s"
+            params.append(f"%{outcome}%")
+
+        cur.execute(f"""
+            SELECT row_number, applicant_ref, product_code, status, outcome,
+                   risk_class, net_debit_points, primary_reason, error_codes,
+                   premium, premium_note, ai_decision, ai_risk_score
+            FROM batch_job_records
+            WHERE job_id = %s {outcome_filter}
+            ORDER BY row_number
+            LIMIT %s OFFSET %s
+        """, params + [per_page, offset])
+        rows = [dict(r) if hasattr(r, 'keys') else {
+            'row_number': r[0], 'applicant_ref': r[1], 'product_code': r[2],
+            'status': r[3], 'outcome': r[4], 'risk_class': r[5],
+            'net_debit_points': r[6], 'primary_reason': r[7], 'error_codes': r[8],
+            'premium': float(r[9]) if r[9] else None, 'premium_note': r[10],
+            'ai_decision': r[11], 'ai_risk_score': r[12],
+        } for r in cur.fetchall()]
+
+        cur.execute("SELECT COUNT(*) FROM batch_job_records WHERE job_id = %s", (job_id,))
+        count_row = cur.fetchone()
+        total = count_row["count"] if count_row else 0
+        cur.close()
+        return {"records": rows, "total": int(total), "page": page, "per_page": per_page}
+    finally:
+        release(db)
+
+
 def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentUser = None):
     import json as _json
     conn, release = _jobs_db()

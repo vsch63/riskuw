@@ -408,7 +408,7 @@ def create_cession(body: CessionCreate, current: CurrentUser):
                 cession_effective_date, cession_expiry_date, notes,
                 created_at, updated_at
             ) VALUES (
-                %s, %s, %s::uuid,
+                %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s,
@@ -418,7 +418,7 @@ def create_cession(body: CessionCreate, current: CurrentUser):
             )
             RETURNING id::text, cession_ref
         """, (
-            body.case_id, app_id, body.reinsurer_id,
+            body.case_id, app_id, int(body.reinsurer_id) if body.reinsurer_id else None,
             cession_ref, treaty, body.cession_type,
             body.gross_face_amount, body.retention_amount, body.ceded_amount,
             body.gross_premium, body.ri_premium, body.net_retained_premium,
@@ -529,13 +529,17 @@ def record_slip(body: SlipRecord, current: CurrentUser):
             cur.execute("""
                 UPDATE ri_cession
                 SET slip_generated_at = NOW(),
+                    status = CASE
+                        WHEN status = 'PENDING_SUBMISSION' THEN 'SLIP_GENERATED'
+                        ELSE status
+                    END,
                     retention_amount  = %s,
                     ceded_amount      = %s,
                     ri_premium        = %s,
                     cession_effective_date = %s::date,
                     cession_expiry_date    = %s::date,
                     updated_at        = NOW()
-                WHERE id = %s::uuid
+                WHERE id = %s
             """, (
                 body.retention_amount, body.ceded_amount, body.ri_premium,
                 body.cession_effective_date or None,
@@ -554,7 +558,7 @@ def record_slip(body: SlipRecord, current: CurrentUser):
                     cession_effective_date, cession_expiry_date,
                     created_at, updated_at
                 ) VALUES (
-                    %s, %s::uuid, %s, 'FACULTATIVE',
+                    %s, %s, %s, 'FACULTATIVE',
                     %s, %s, %s, %s, %s,
                     'SLIP_GENERATED', NOW(), %s,
                     %s::date, %s::date,
@@ -562,7 +566,7 @@ def record_slip(body: SlipRecord, current: CurrentUser):
                 )
             """, (
                 body.case_id,
-                body.reinsurer_id or None,
+                int(body.reinsurer_id) if body.reinsurer_id else None,
                 cession_ref,
                 body.ceded_amount + body.retention_amount,  # gross = ceded + retention
                 body.retention_amount, body.ceded_amount,
@@ -579,3 +583,4 @@ def record_slip(body: SlipRecord, current: CurrentUser):
         raise HTTPException(500, f"Failed to record slip: {e}")
     finally:
         release(conn)
+

@@ -1143,3 +1143,159 @@ def extract_to_file(body: dict, current: CurrentUser):
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     finally:
         release(conn)
+
+
+# ── Letter Generation ──────────────────────────────────────────────────────────
+
+@router.get("/letter-templates/{tid}/generate")
+def generate_letter(
+    tid:            str,
+    applicant_ref:  str = Query(...),
+    applicant_name: str = Query(default=""),
+    product_name:   str = Query(default=""),
+    product_code:   str = Query(default=""),
+    face_amount:    float = Query(default=0),
+    premium:        float = Query(default=0),
+    risk_class:     str = Query(default=""),
+    outcome:        str = Query(default=""),
+    case_number:    str = Query(default=""),
+    current:        CurrentUser = None,
+):
+    """Generate an HTML decision letter using a template."""
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM letter_templates WHERE id=%s AND is_active=true", (tid,))
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            raise HTTPException(404, f"Template {tid} not found")
+        t = dict(row) if hasattr(row, "keys") else {}
+    finally:
+        release(conn)
+
+    from datetime import datetime
+    from fastapi.responses import HTMLResponse
+
+    today = datetime.now().strftime("%d %B %Y")
+    ref   = applicant_ref.upper()
+
+    # Format currency
+    def fmt_inr(amt):
+        if not amt: return "—"
+        return f"₹{amt:,.0f}"
+
+    next_steps_html = "".join(
+        f"<li>{s.strip()}</li>"
+        for s in (t.get("next_steps") or "").split("\n")
+        if s.strip()
+    )
+
+    outcome_color = {
+        "APPROVED": "#16a34a", "APPROVED_STP": "#16a34a",
+        "DECLINED": "#dc2626", "REFERRED": "#d97706",
+        "APS_REQUEST": "#2563eb",
+    }.get(outcome.upper(), "#374151")
+
+    outcome_label = {
+        "APPROVED": "APPROVED", "APPROVED_STP": "APPROVED — STRAIGHT THROUGH",
+        "DECLINED": "DECLINED", "REFERRED": "PENDING REVIEW",
+        "APS_REQUEST": "APS REQUESTED",
+    }.get(outcome.upper(), outcome.upper())
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>UW Decision Letter — {ref}</title>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ font-family: Georgia, serif; color: #1f2937; background: #fff; padding: 40px; max-width: 800px; margin: 0 auto; }}
+  .header {{ border-bottom: 3px solid #0f766e; padding-bottom: 20px; margin-bottom: 30px; display:flex; justify-content:space-between; align-items:flex-start; }}
+  .company-name {{ font-size: 24px; font-weight: bold; color: #0f766e; }}
+  .tagline {{ font-size: 12px; color: #6b7280; margin-top: 4px; }}
+  .contact {{ text-align: right; font-size: 12px; color: #6b7280; line-height: 1.8; }}
+  .date-ref {{ margin-bottom: 24px; font-size: 13px; color: #6b7280; }}
+  .applicant {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px; }}
+  .applicant h3 {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: #9ca3af; margin-bottom: 8px; }}
+  .applicant-name {{ font-size: 18px; font-weight: bold; color: #111827; }}
+  .applicant-ref {{ font-size: 12px; color: #6b7280; margin-top: 4px; font-family: monospace; }}
+  .decision-badge {{ display: inline-block; background: {outcome_color}; color: white; padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: bold; letter-spacing: 0.05em; margin-bottom: 24px; }}
+  .policy-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
+  .policy-item {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 16px; }}
+  .policy-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #9ca3af; margin-bottom: 4px; }}
+  .policy-value {{ font-size: 15px; font-weight: 600; color: #111827; }}
+  .section {{ margin-bottom: 24px; }}
+  .section h2 {{ font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; color: #374151; margin-bottom: 10px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }}
+  .body-text {{ font-size: 13px; line-height: 1.8; color: #374151; }}
+  .next-steps {{ font-size: 13px; line-height: 2; color: #374151; padding-left: 20px; }}
+  .footer {{ border-top: 1px solid #e5e7eb; padding-top: 16px; margin-top: 32px; font-size: 11px; color: #9ca3af; line-height: 1.6; }}
+  .print-btn {{ position: fixed; top: 20px; right: 20px; background: #0f766e; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }}
+  @media print {{ .print-btn {{ display: none; }} body {{ padding: 20px; }} }}
+</style>
+</head>
+<body>
+<button class="print-btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+
+<div class="header">
+  <div>
+    <div class="company-name">{t.get("header_company_name") or "RiskUW Insurance"}</div>
+    <div class="tagline">{t.get("header_tagline") or "Automated Underwriting Decision"}</div>
+  </div>
+  <div class="contact">
+    {t.get("contact_email") or ""}<br/>
+    {t.get("contact_phone") or ""}<br/>
+    IRDAI Reg. No. XXX
+  </div>
+</div>
+
+<div class="date-ref">
+  <strong>Date:</strong> {today} &nbsp;&nbsp;&nbsp;
+  <strong>Ref:</strong> {case_number or ref} &nbsp;&nbsp;&nbsp;
+  <strong>Application:</strong> {ref}
+</div>
+
+<div class="applicant">
+  <h3>Applicant</h3>
+  <div class="applicant-name">{applicant_name or "Applicant"}</div>
+  <div class="applicant-ref">Ref: {ref}</div>
+</div>
+
+<div class="decision-badge">{outcome_label}</div>
+
+<div class="policy-grid">
+  <div class="policy-item">
+    <div class="policy-label">Product</div>
+    <div class="policy-value">{product_name or product_code or "—"}</div>
+  </div>
+  <div class="policy-item">
+    <div class="policy-label">Sum Assured</div>
+    <div class="policy-value">{fmt_inr(face_amount)}</div>
+  </div>
+  <div class="policy-item">
+    <div class="policy-label">Annual Premium</div>
+    <div class="policy-value">{fmt_inr(premium)}</div>
+  </div>
+  <div class="policy-item">
+    <div class="policy-label">Risk Class</div>
+    <div class="policy-value">{risk_class or "—"}</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Decision</h2>
+  <p class="body-text">{t.get("body_text") or ""}</p>
+</div>
+
+{"" if not next_steps_html else f'''<div class="section">
+  <h2>Next Steps</h2>
+  <ol class="next-steps">{next_steps_html}</ol>
+</div>'''}
+
+<div class="footer">
+  {t.get("footer_text") or ""}
+</div>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html, status_code=200)

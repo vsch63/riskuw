@@ -568,6 +568,10 @@ function JobMonitorTab({ onViewResults }: { onViewResults: (jobId: string) => vo
 // TAB 3 — Results & Downloads
 // ══════════════════════════════════════════════════════════════════════════════
 function ResultsTab({ initialJobId }: { initialJobId?: string }) {
+  const [records, setRecords]  = useState<any[]>([])
+  const [recTotal, setRecTotal] = useState(0)
+  const [recPage, setRecPage]  = useState(1)
+  const [recLoading, setRecLoad] = useState(false)
   const [jobs, setJobs]        = useState<BatchJob[]>([])
   const [selJob, setSelJob]    = useState(initialJobId || '')
   useEffect(() => { if (initialJobId) setSelJob(initialJobId) }, [initialJobId])
@@ -593,6 +597,38 @@ function ResultsTab({ initialJobId }: { initialJobId?: string }) {
         if (found) setDetail(found)
       })
   }, [selJob])
+
+  const loadRecords = async (jobId: string, page: number) => {
+    if (!jobId) return
+    setRecLoad(true)
+    try {
+      const r = await api.get(`/batch/jobs/${jobId}/records`, { params: { page, per_page: 50 } })
+      setRecords(r.data.records || [])
+      setRecTotal(r.data.total || 0)
+    } catch { setRecords([]) }
+    finally { setRecLoad(false) }
+  }
+
+  useEffect(() => { if (selJob) { setRecPage(1); loadRecords(selJob, 1) } }, [selJob])
+
+  const openLetter = (rec: any) => {
+    const tplMap: Record<string,string> = {
+      'APPROVED_STP': 'TPL-APPROVED-001', 'APPROVED': 'TPL-APPROVED-001',
+      'DECLINED': 'TPL-DECLINED-001', 'REFERRED': 'TPL-REFERRED-001',
+    }
+    const tplId = tplMap[rec.outcome] || 'TPL-APPROVED-001'
+    const params = new URLSearchParams({
+      applicant_ref: rec.applicant_ref || '',
+      outcome:       rec.outcome || '',
+      risk_class:    rec.risk_class || '',
+      premium:       String(rec.premium || 0),
+      product_code:  rec.product_code || '',
+    })
+    const token = localStorage.getItem('riskuw_token')
+    fetch(`/system/letter-templates/${tplId}/generate?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).then(r => r.blob()).then(blob => window.open(URL.createObjectURL(blob), '_blank'))
+  }
 
   const download = async (type: 'results'|'errors'|'summary', fmt: 'csv'|'xlsx') => {
     const key = `${type}_${fmt}`
@@ -682,6 +718,45 @@ function ResultsTab({ initialJobId }: { initialJobId?: string }) {
               ))}
             </div>
           </div>
+
+        {/* Records table with letter generation */}
+        {records.length > 0 && (
+          <div style={card}>
+            <div style={secTitle}>Individual Records ({recTotal.toLocaleString()})</div>
+            <Table
+              dataSource={records} rowKey="row_number" size="small" loading={recLoading}
+              scroll={{ x: 900 }}
+              pagination={{ current: recPage, pageSize: 50, total: recTotal,
+                onChange: (p: number) => { setRecPage(p); loadRecords(selJob, p) },
+                showSizeChanger: false, showTotal: (t: number) => `${t} records` }}
+              columns={[
+                { title: '#', dataIndex: 'row_number', width: 60 },
+                { title: 'Ref', dataIndex: 'applicant_ref', width: 130,
+                  render: (v: string) => <code style={{ fontSize:11, color:'#00d4aa' }}>{v}</code> },
+                { title: 'Product', dataIndex: 'product_code', width: 120 },
+                { title: 'Outcome', dataIndex: 'outcome', width: 150,
+                  render: (v: string) => {
+                    const c = v?.includes('APPROVED') ? '#22c55e' : v?.includes('DECLINED') ? '#ef4444' : v?.includes('REFERRED') ? '#f59e0b' : '#6b7280'
+                    return <span style={{ color:c, fontWeight:600, fontSize:11 }}>{v||'—'}</span>
+                  }},
+                { title: 'Risk Class', dataIndex: 'risk_class', width: 110, render: (v:string) => v||'—' },
+                { title: 'NDP', dataIndex: 'net_debit_points', width: 70,
+                  render: (v:number) => <span style={{ color: v>100?'#ef4444':v>50?'#f59e0b':'#22c55e' }}>{v}</span> },
+                { title: 'Premium', dataIndex: 'premium', width: 120,
+                  render: (v:number) => v ? `₹${Number(v).toLocaleString('en-IN')}` : '—' },
+                { title: 'Letter', width: 80,
+                  render: (_:any, rec:any) => (
+                    rec.outcome && !rec.outcome.includes('ERROR') && !rec.outcome.includes('DRY') ? (
+                      <Button size="small" onClick={() => openLetter(rec)}
+                        style={{ fontSize:10, padding:'0 8px', color:'#60a5fa', borderColor:'rgba(96,165,250,0.3)' }}>
+                        📄 Letter
+                      </Button>
+                    ) : null
+                  )},
+              ]}
+            />
+          </div>
+        )}
         </>
       )}
     </div>

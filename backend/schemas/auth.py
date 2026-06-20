@@ -21,6 +21,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     username: str
     role: str
+    full_name: str | None = None       # ← added for display
     tenant_id: str | None = None       # ← added
     tenant_name: str | None = None     # ← added
     mfa_required: bool = False
@@ -40,6 +41,7 @@ class UserCreate(BaseModel):
         allowed = {
             "super_admin", "admin", "senior_underwriter",
             "underwriter", "api_client", "readonly",
+            "agent", "broker",
         }
         if v not in allowed:
             raise ValueError(f"role must be one of {sorted(allowed)}")

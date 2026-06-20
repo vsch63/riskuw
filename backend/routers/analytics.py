@@ -26,6 +26,8 @@ def analytics_summary(
     date_to:   str = Query(default="2099-12-31"),
     current:   CurrentUser = None,
 ):
+    if current and current.role not in ("underwriter","senior_underwriter","admin","super_admin"):
+        raise HTTPException(403, "Access denied")
     """Platform analytics — decisions, STP rate, volumes, trends."""
     conn, release = _get_db()
     try:
@@ -236,6 +238,8 @@ def uw_analytics(
     date_to:   str = Query(default="2099-12-31"),
     current:   CurrentUser = None,
 ):
+    if current and current.role not in ("underwriter","senior_underwriter","admin","super_admin"):
+        raise HTTPException(403, "Access denied")
     """Underwriting-specific analytics — rules fired, debit points, AI scores."""
     conn, release = _get_db()
     try:

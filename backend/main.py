@@ -132,6 +132,8 @@ from routers.members          import router as members_router    # ← NEW
 from routers.user_labels      import router as user_labels_router        # ← NEW
 from routers.ocr_extract      import router as ocr_router                   # ← OCR
 from routers.analytics        import router as analytics_router             # ← ANALYTICS
+from routers.icd10            import router as icd10_router                 # ← ICD10
+from routers.agent_portal     import router as agent_router                 # ← AGENT
 
 app.include_router(auth_router)
 app.include_router(products_router)
@@ -161,7 +163,20 @@ except ImportError:
 
 app.include_router(ocr_router)
 app.include_router(analytics_router)
+app.include_router(icd10_router)
+app.include_router(agent_router)
 
+try:
+    from routers.workbench import router as workbench_router
+    app.include_router(workbench_router)
+except ImportError:
+    logger.warning("routers/workbench.py not found — Workbench endpoints disabled")
+
+try:
+    from routers.integrations import router as integrations_router
+    app.include_router(integrations_router)
+except ImportError:
+    logger.warning("routers/integrations.py not found — Integration endpoints disabled")
 
 # ── Global exception handler ──────────────────────────────────────────────────
 from fastapi import Request

@@ -17,7 +17,7 @@ const METRIC_ICONS: Record<string, React.ReactNode> = {
 
 interface Metrics {
   total: number; approved: number; declined: number;
-  referred: number; stp_rate: number;
+  referred: number; errored?: number; stp_rate: number;
 }
 
 function MetricCard({ label, value, icon, color }: {
@@ -54,11 +54,27 @@ function MetricCard({ label, value, icon, color }: {
 
 export default function DashboardPage() {
   const [cases, setCases] = useState<QueueCase[]>([])
+  const [metrics, setMetrics] = useState<Metrics>({ total: 0, approved: 0, declined: 0, referred: 0, stp_rate: 0 })
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
   useEffect(() => {
-    uwAPI.getCases(100)
+    const token = localStorage.getItem('riskuw_token')
+
+    // Aggregate stats across single-evaluate + batch records
+    fetch('/underwriting/dashboard-stats', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(d => setMetrics({
+        total:    d.total    ?? 0,
+        approved: d.approved ?? 0,
+        declined: d.declined ?? 0,
+        referred: d.referred ?? 0,
+        stp_rate: d.stp_rate ?? 0,
+      }))
+      .catch(() => {})
+
+    // Recent decisions list (single-evaluate only)
+    uwAPI.getCases(8)
       .then((r) => {
         const data = Array.isArray(r.data) ? r.data : (r.data.cases ?? r.data.items ?? [])
         setCases(data)
@@ -66,16 +82,6 @@ export default function DashboardPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
-
-  const metrics: Metrics = {
-    total:    cases.length,
-    approved: cases.filter(c => c.outcome?.includes('APPROVED')).length,
-    declined: cases.filter(c => c.outcome?.includes('DECLIN')).length,
-    referred: cases.filter(c => c.outcome?.includes('REFER')).length,
-    stp_rate: cases.length
-      ? Math.round((cases.filter(c => c.outcome?.includes('APPROVED')).length / cases.length) * 100)
-      : 0,
-  }
 
   const recent = [...cases].reverse().slice(0, 8)
 
@@ -89,7 +95,7 @@ export default function DashboardPage() {
           Dashboard
         </h1>
         <p style={{ color: 'var(--slate-500)', fontSize: 13, marginTop: 4, marginBottom: 0 }}>
-          Platform overview · live from API
+          Platform overview · live from API · includes single-evaluate + batch decisions
         </p>
       </div>
 
@@ -100,13 +106,14 @@ export default function DashboardPage() {
       ) : (
         <>
           <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+            display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
             gap: 16, marginBottom: 32,
           }}>
             <MetricCard label="Total Decisions" value={metrics.total} icon={<ThunderboltOutlined />} color="#00d4aa" />
             <MetricCard label="Approved" value={metrics.approved} icon={<CheckCircleOutlined />} color="#22c55e" />
             <MetricCard label="Declined" value={metrics.declined} icon={<CloseCircleOutlined />} color="#ef4444" />
             <MetricCard label="Referred" value={metrics.referred} icon={<SwapOutlined />} color="#fbbf24" />
+            <MetricCard label="Errored" value={metrics.errored ?? 0} icon={<CloseCircleOutlined />} color="#94a3b8" />
           </div>
 
           {/* STP rate bar */}
@@ -217,3 +224,4 @@ export default function DashboardPage() {
     </div>
   )
 }
+

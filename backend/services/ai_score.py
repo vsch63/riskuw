@@ -405,3 +405,65 @@ def get_ai_score(payload: dict, engine: str = "xgboost", conn=None) -> dict:
 
     else:
         return {"error": f"Unknown engine: {engine}. Use xgboost, claude, or ollama"}
+
+
+# ── AI Audit Trail ─────────────────────────────────────────────────────────────
+def log_ai_decision(
+    conn,
+    *,
+    ai_result: dict,
+    input_payload: dict,
+    source: str = "EVALUATE",          # EVALUATE | BATCH | WORKBENCH
+    case_ref_id: int | None = None,
+    job_id: str | None = None,
+    applicant_ref: str | None = None,
+    product_code: str | None = None,
+    requested_by: str | None = None,
+) -> int | None:
+    """
+    Persist a record of an AI-assist call for explainability/regulatory audit.
+    Non-fatal — logs a warning and returns None on failure rather than raising,
+    so AI logging never breaks the calling request.
+    """
+    if not conn or not ai_result or ai_result.get("error"):
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO ai_decision_log (
+                case_ref_id, job_id, applicant_ref, product_code, source,
+                ai_engine, ai_model, input_payload,
+                risk_tier, risk_score, confidence, recommendation,
+                primary_concerns, positive_factors, narrative, loading_suggestion,
+                rules_outcome, rules_ndp, requested_by, created_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, now()
+            )
+            RETURNING id
+        """, (
+            case_ref_id, job_id, applicant_ref, product_code, source,
+            ai_result.get("engine"), ai_result.get("model"),
+            json.dumps(input_payload, default=str),
+            ai_result.get("risk_tier"), ai_result.get("risk_score"),
+            ai_result.get("confidence"), ai_result.get("recommendation"),
+            json.dumps(ai_result.get("primary_concerns") or []),
+            json.dumps(ai_result.get("positive_factors") or []),
+            ai_result.get("narrative"), ai_result.get("loading_suggestion"),
+            input_payload.get("uw_outcome"), input_payload.get("net_debit_points"),
+            requested_by,
+        ))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        return (dict(row) if hasattr(row, "keys") else {"id": row[0]}).get("id") if row else None
+    except Exception as e:
+        logger.warning(f"log_ai_decision failed: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None

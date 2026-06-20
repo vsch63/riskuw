@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import DocumentUploadPanel from './DocumentUploadPanel'
+import Icd10Lookup from './Icd10Lookup'
 import {
   Form, Input, InputNumber, Select, DatePicker,
   Checkbox, Button, Spin, Tooltip, Collapse, Tag, Divider, message, Tabs,
@@ -444,6 +445,7 @@ function DecisionCard({ result, loading, appRef }: {
         borderRadius: 12, padding: '0 16px', marginBottom: 14, flexShrink: 0 }}>
         <SectionLabel>Reference</SectionLabel>
         {result.application_id && <DataRow label="Application ID" value={result.application_id} mono />}
+        {result.case_number && <DataRow label="Case Number" value={result.case_number} mono />}
         {result.case_id && <DataRow label="Case ID" value={result.case_id} mono />}
         {result.decision_id && <DataRow label="Decision ID" value={result.decision_id} mono />}
         {result.rules_version && <DataRow label="Rules Version" value={result.rules_version} mono />}
@@ -535,6 +537,7 @@ function DecisionCard({ result, loading, appRef }: {
 
       {/* Download report button */}
       {result && (
+        <>
         <Button
           icon={<DownloadOutlined />}
           onClick={() => {
@@ -577,6 +580,42 @@ function DecisionCard({ result, loading, appRef }: {
         >
           Download Decision Report
         </Button>
+        <Button
+          onClick={() => {
+              const outcome = result.outcome || ''
+              const tplMap: Record<string,string> = {
+                'APPROVED_STP': 'TPL-APPROVED-001',
+                'APPROVED':     'TPL-APPROVED-001',
+                'DECLINED':     'TPL-DECLINED-001',
+                'REFERRED':     'TPL-REFERRED-001',
+              }
+              const tplId = tplMap[outcome] || 'TPL-APPROVED-001'
+              const params = new URLSearchParams({
+                applicant_ref:  result.application_id || '',
+                product_code:   result.product_code || '',
+                face_amount:    String(result.face_amount || 0),
+                premium:        String(result.approved_premium || 0),
+                risk_class:     result.risk_class || '',
+                outcome:        outcome,
+                case_number:    result.case_number || '',
+              })
+              const token = localStorage.getItem('riskuw_token')
+              fetch(`/system/letter-templates/${tplId}/generate?${params}`, {
+                headers: { Authorization: `Bearer ${token}` }
+              }).then(r => r.blob()).then(blob => {
+                const url = URL.createObjectURL(blob)
+                window.open(url, '_blank')
+              })
+            }}
+            style={{
+              width: '100%', marginBottom: 8,
+              borderColor: 'rgba(59,130,246,0.3)', color: '#60a5fa',
+              background: 'rgba(59,130,246,0.05)',
+            }}
+          >
+            📄 Generate Decision Letter
+          </Button>
+        </>
       )}
     </div>
   )
@@ -616,26 +655,24 @@ export default function EvaluatePage() {
 
   // AI Assist state
   const [aiEngine, setAiEngine]     = useState('xgboost')
-  const [ollamaModel, setOllamaModel] = useState('llava-llama3:latest')
   const [aiResult, setAiResult]     = useState<any>(null)
   const [aiLoading, setAiLoading]   = useState(false)
   const [lastPayload, setLastPayload] = useState<any>(null)
 
-  // Load user labels for the selected product's premium formula
+  // Load active user labels for premium formula inputs
   useEffect(() => {
-    if (!selectedCode) return
-    api.get(`/products/${selectedCode}/formula-labels`)
-      .then(r => setUserLabels(Array.isArray(r.data) ? r.data : []))
-      .catch(() => {
-        // Fallback: load all active user labels
-        api.get('/system/user-labels/keys')
-          .then(r => setUserLabels(Array.isArray(r.data) ? r.data : []))
-          .catch(() => setUserLabels([]))
-      })
-  }, [selectedCode])
+    const token = localStorage.getItem('riskuw_token')
+    fetch('/system/user-labels/keys', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }).then(r => r.json()).then(data => {
+      setUserLabels(Array.isArray(data) ? data : [])
+    }).catch(() => {})
+  }, [])
 
   // Watched form values for conditional rendering
   const tobacco    = Form.useWatch('tobacco_status', form) ?? 'NEVER'
+  const [icd10Codes, setIcd10Codes] = useState<any[]>([])
+  const [icd10Debits, setIcd10Debits] = useState(0)
   const diabetes   = Form.useWatch('diabetes_type', form) ?? 'NONE'
   const cardiac    = Form.useWatch('heart_condition', form) ?? 'NONE'
   const useBuild   = Form.useWatch('use_build', form) ?? true
@@ -719,6 +756,8 @@ export default function EvaluatePage() {
       heart_condition:  v.heart_condition ?? 'NONE',
       heart_event_years_ago: cardiac !== 'NONE' ? v.heart_yrs : null,
       diabetes_type:    v.diabetes_type ?? 'NONE',
+      icd10_codes:      icd10Codes.map((c: any) => c.code),
+      extra_debit_points: icd10Debits,
       diabetes_dx_age:  diabetes !== 'NONE' ? v.diabetes_dx_age : null,
       a1c:              diabetes !== 'NONE' ? v.a1c : null,
       hiv_positive:     v.hiv_positive ?? false,
@@ -848,7 +887,7 @@ export default function EvaluatePage() {
       children: (
         <div style={{
           display: 'flex', height: 'calc(100vh - 108px)',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}>
       {/* ── Left: Form ── */}
       <div style={{
@@ -932,7 +971,6 @@ export default function EvaluatePage() {
 
         {/* Document Upload Panel */}
         <DocumentUploadPanel onExtracted={(fields) => {
-          // Map extracted fields to form field names
           const formFields: Record<string, any> = {}
           if (fields.age !== undefined)              formFields.age = fields.age
           if (fields.gender)                         formFields.gender = fields.gender
@@ -948,21 +986,13 @@ export default function EvaluatePage() {
           if (fields.heart_condition)                formFields.heart_condition = fields.heart_condition
           if (fields.annual_income !== undefined)    formFields.annual_income = fields.annual_income
           if (fields.existing_coverage !== undefined) formFields.existing_coverage = fields.existing_coverage
-          if (fields.hiv_positive !== undefined)     formFields.hiv_positive = fields.hiv_positive
-          if (fields.stroke_history !== undefined)   formFields.stroke_history = fields.stroke_history
-          if (fields.kidney_disease !== undefined)   formFields.kidney_disease = fields.kidney_disease
-          if (fields.copd !== undefined)             formFields.copd = fields.copd
-          if (fields.hazardous_activity !== undefined) formFields.hazardous_activity = fields.hazardous_activity
-          if (fields.alcohol_drinks_week !== undefined) formFields.alcohol_drinks_week = fields.alcohol_drinks_week
-          if (fields.a1c !== undefined)              formFields.a1c = fields.a1c
-          if (fields.occupation_title)               formFields.occupation_title = fields.occupation_title
           if (fields.applicant_ref)                  formFields.applicant_ref = fields.applicant_ref
           if (fields.product_code)                   formFields.product_code = fields.product_code
           form.setFieldsValue(formFields)
         }}/>
 
-        {/* Main form */}
         <Form
+          form={form}
           form={form}
           layout="vertical"
           initialValues={{
@@ -1126,6 +1156,16 @@ export default function EvaluatePage() {
               )}
 
               {/* ── DIABETES ── */}
+              <SectionLabel>ICD-10 Diagnosis Codes</SectionLabel>
+              <Icd10Lookup onChange={(codes, debits) => {
+                setIcd10Codes(codes)
+                setIcd10Debits(debits)
+              }}/>
+              {icd10Debits > 0 && (
+                <div style={{ fontSize:12, color:'#f87171', marginBottom:12 }}>
+                  ⚠️ ICD-10 codes add <strong>+{icd10Debits} debit points</strong> to this evaluation
+                </div>
+              )}
               <SectionLabel>Diabetes</SectionLabel>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
                 <Form.Item name="diabetes_type" label="Type">
@@ -1368,7 +1408,7 @@ export default function EvaluatePage() {
             </span>
           )}
         </div>
-        <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <DecisionCard result={result} loading={submitting} appRef={appRef} />
         </div>
 
@@ -1387,14 +1427,14 @@ export default function EvaluatePage() {
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <Select key="ai-engine" value={aiEngine} onChange={setAiEngine} size="small" style={{ flex: 1 }}>
+              <Select value={aiEngine} onChange={setAiEngine} size="small" style={{ flex: 1 }}>
                 <Option value="xgboost">⚡ XGBoost ML (Fast, local)</Option>
                 <Option value="claude">🧠 Claude AI (Anthropic)</Option>
                 <Option value="ollama">🦙 Ollama LLM (Local)</Option>
               </Select>
               {aiEngine === 'ollama' && (
-                <Select key="ollama-model" value={ollamaModel} size="small" style={{ flex: 1 }}
-                  onChange={v => setOllamaModel(v)}>
+                <Select defaultValue="llava-llama3:latest" size="small" style={{ flex: 1 }}
+                  onChange={v => setLastPayload((p: any) => ({ ...p, ollama_model: v }))}>
                   <Option value="llava-llama3:latest">llava-llama3 (8B)</Option>
                   <Option value="llava:latest">llava (7B)</Option>
                   <Option value="minicpm-v:latest">minicpm-v (7.6B)</Option>
@@ -1410,7 +1450,7 @@ export default function EvaluatePage() {
                     const r = await fetch('/underwriting/ai-score', {
                       method: 'POST',
                       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ...lastPayload, engine: aiEngine, ollama_model: ollamaModel }),
+                      body: JSON.stringify({ ...lastPayload, engine: aiEngine }),
                     }).then(r => r.json())
                     setAiResult(r)
                   } catch(e: any) { message.error('AI scoring failed') }
@@ -1501,7 +1541,7 @@ export default function EvaluatePage() {
     {
       key: 'platform',
       label: <span>📈 Platform Analytics</span>,
-      children: <div style={{ padding: '24px 32px', overflowY: 'auto', height: 'calc(100vh - 160px)' }}><PlatformAnalyticsTab/></div>,
+      children: <div style={{ padding: '24px 32px' }}><PlatformAnalyticsTab/></div>,
     },
   ]
 

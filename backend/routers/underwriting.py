@@ -306,11 +306,53 @@ def evaluate(body: EvaluateRequest, current: CurrentUser):
     Delegates to services.uw_engine.run_evaluation() if available,
     otherwise uses the built-in fallback engine with UW scale integration.
     """
+    if current.role not in ("underwriter","senior_underwriter","admin","super_admin"):
+        raise HTTPException(403, "Underwriters only")
+    if current.role not in ("underwriter","senior_underwriter","admin","super_admin"):
+        raise HTTPException(403, "Underwriters only")
     try:
         from services.uw_engine import run_evaluation
         result = run_evaluation(body.model_dump(), current.username, current.tenant_id)
     except ImportError:
         result = _fallback_evaluate(body, current)
+
+    # Apply ICD-10 extra debit points
+    extra_debits = getattr(body, 'extra_debit_points', 0) or 0
+    icd10_codes  = getattr(body, 'icd10_codes', []) or []
+    if extra_debits > 0 and icd10_codes:
+        original_debits = result.get("net_debit_points", 0) or 0
+        new_debits = original_debits + extra_debits
+        result["net_debit_points"]   = new_debits
+        result["icd10_codes"]        = icd10_codes
+        result["icd10_debit_points"] = extra_debits
+        conn2, release2 = _get_db()
+        try:
+            import psycopg2.extras
+            conn2.cursor_factory = psycopg2.extras.RealDictCursor
+            cur2 = conn2.cursor()
+            cur2.execute(
+                "SELECT stp_threshold, refer_threshold, decline_threshold FROM products WHERE product_code=%s",
+                (body.product_code,)
+            )
+            row2 = cur2.fetchone()
+            thresh = dict(row2) if row2 else {}
+            cur2.close()
+        finally:
+            release2(conn2)
+        stp     = thresh.get("stp_threshold", 75)
+        refer   = thresh.get("refer_threshold", 175)
+        decline = thresh.get("decline_threshold", 350)
+        if new_debits >= decline:
+            result["outcome"] = "DECLINED"
+        elif new_debits >= refer:
+            result["outcome"] = "REFERRED"
+        elif new_debits > stp:
+            result["outcome"] = "APPROVED_RATED"
+
+
+    case_number = _persist_decision(body, result, current)
+    if case_number:
+        result["case_number"] = case_number
 
     _persist_to_queue(body, result, current)
 
@@ -345,6 +387,164 @@ def evaluate(body: EvaluateRequest, current: CurrentUser):
         logger.warning(f"Decision email skipped: {_email_err}")
 
     return result
+
+
+def _persist_decision(body: "EvaluateRequest", result: dict, current) -> str | None:
+    """
+    Persist an evaluation to application -> uw_case -> uw_decision.
+    Returns the case_number, or None if persistence failed (non-fatal).
+    """
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+
+        outcome = (result.get("outcome") or "REFERRED").upper()
+        username = current.username
+        tenant_id = current.tenant_id
+
+        # ── Map outcome -> case status + decision pathway ──────────────────────
+        if "APPROVED_STP" in outcome or "INSTANT" in outcome and "DECLINE" not in outcome:
+            status, pathway, by_type = "APPROVED", "STRAIGHT_THROUGH", "AUTOMATED"
+        elif "APPROVED" in outcome:
+            status, pathway, by_type = "APPROVED", "ACCELERATED", "AUTOMATED"
+        elif "DECLINED" in outcome:
+            status, pathway, by_type = "DECLINED", "INSTANT_DECLINE", "AUTOMATED"
+        elif "REFERRED" in outcome:
+            status, pathway, by_type = "IN_REVIEW", "REFERRED", "AUTOMATED"
+        else:
+            status, pathway, by_type = "IN_REVIEW", "REFERRED", "AUTOMATED"
+
+        # application.status and uw_case.status use different allowed vocabularies
+        case_status_map = {"IN_REVIEW": "PENDING_REVIEW"}
+        case_status = case_status_map.get(status, status)
+
+        app_id = str(_uuid.uuid4())
+        case_id = str(_uuid.uuid4())
+        dec_id = str(_uuid.uuid4())
+
+        # ── application_number / case_number ────────────────────────────────────
+        ts = datetime.now(timezone.utc).strftime("%y%m%d%H%M%S%f")[:14]
+        app_number = f"APP-{ts}"
+        case_number = f"CASE-{ts}"
+
+        # ── 1. application ───────────────────────────────────────────────────────
+        cur.execute(
+            """
+            INSERT INTO application (
+                id, application_number, product_type, product_code, channel,
+                applicant_ref, age, gender, state, citizenship,
+                face_amount, coverage_term_yrs, is_replacement, status,
+                submitted_at, raw_payload,
+                created_by, updated_by, version, is_deleted, tenant_id
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                now(), %s,
+                %s, %s, 1, false, %s
+            )
+            """,
+            (
+                app_id, app_number, "INDIVIDUAL", body.product_code, "DIRECT",
+                body.applicant_ref, body.age, body.gender, body.state, "IN",
+                body.face_amount, getattr(body, "coverage_term_yrs", None) or getattr(body, "term_yrs", None),
+                False, status,
+                __import__("json").dumps(body.model_dump(), default=str),
+                username, username, tenant_id,
+            ),
+        )
+
+        # ── 2. uw_case ────────────────────────────────────────────────────────────
+        sla_hours = 48
+        cur.execute(
+            """
+            INSERT INTO uw_case (
+                id, case_number, application_id, product_type, status,
+                decision_pathway, sla_due_at, sla_breached,
+                auto_decision_at, final_decision_at,
+                reinsurance_required,
+                created_by, updated_by, version, is_deleted, tenant_id,
+                product_code, applicant_age, face_amount
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, now() + interval '%s hours', false,
+                now(), CASE WHEN %s THEN now() ELSE NULL END,
+                false,
+                %s, %s, 1, false, %s,
+                %s, %s, %s
+            )
+            """,
+            (
+                case_id, case_number, app_id, "INDIVIDUAL", case_status,
+                pathway, sla_hours,
+                status in ("APPROVED", "DECLINED"),
+                username, username, tenant_id,
+                body.product_code, body.age, body.face_amount,
+            ),
+        )
+
+        # ── 3. uw_decision ────────────────────────────────────────────────────────
+        findings = {
+            "rules_fired": result.get("rules_fired", []),
+            "error_codes": result.get("error_codes", []),
+            "raw_result": {k: v for k, v in result.items()
+                            if k not in ("rules_fired", "error_codes")},
+        }
+
+        cur.execute(
+            """
+            INSERT INTO uw_decision (
+                id, case_id, application_id, decision_sequence, is_final,
+                outcome, risk_class,
+                total_debit_points, total_credit_points, net_debit_points,
+                approved_face_amount, approved_premium,
+                decline_reason_code, adverse_action_text,
+                findings_json, is_override,
+                decided_by_type, decided_by_id, decided_at,
+                primary_reason,
+                created_by, updated_by, version, is_deleted, tenant_id
+            ) VALUES (
+                %s, %s, %s, 1, true,
+                %s, %s,
+                %s, %s, %s,
+                %s, %s,
+                %s, %s,
+                %s, false,
+                %s, NULL, now(),
+                %s,
+                %s, %s, 1, false, %s
+            )
+            """,
+            (
+                dec_id, case_id, app_id,
+                outcome, result.get("risk_class"),
+                result.get("total_debit_points", result.get("net_debit_points", 0)) or 0,
+                result.get("total_credit_points", 0) or 0,
+                result.get("net_debit_points", 0) or 0,
+                body.face_amount if status == "APPROVED" else None,
+                result.get("approved_premium") or result.get("premium"),
+                result.get("decline_reason_code"),
+                result.get("adverse_action_text") or result.get("primary_reason"),
+                __import__("json").dumps(findings, default=str),
+                by_type,
+                result.get("primary_reason"),
+                username, username, tenant_id,
+            ),
+        )
+
+        conn.commit()
+        cur.close()
+        return case_number
+
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"Could not persist decision for {body.applicant_ref}: {e}")
+        return None
+    finally:
+        release(conn)
 
 
 def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
@@ -661,6 +861,53 @@ def list_cases(current: CurrentUser, page_size: int = 50, page: int = 1):
         release(conn)
 
 
+@router.get("/dashboard-stats")
+def dashboard_stats(current: CurrentUser):
+    """
+    Aggregate decision counts across BOTH single-evaluate (policy_admin_queue)
+    and batch-processed (batch_job_records) records, for the main Dashboard.
+    Excludes DRY_RUN and ERROR-status rows to match Performance Analytics.
+    """
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                COUNT(*)                                              AS total,
+                COUNT(*) FILTER (WHERE outcome ILIKE '%%APPROVED%%')  AS approved,
+                COUNT(*) FILTER (WHERE outcome ILIKE '%%DECLIN%%')    AS declined,
+                COUNT(*) FILTER (WHERE outcome ILIKE '%%REFER%%')     AS referred,
+                COUNT(*) FILTER (WHERE outcome ILIKE '%%ERROR%%'
+                                   OR outcome = 'PRODUCT_NOT_FOUND')  AS errored
+            FROM (
+                SELECT outcome, status FROM policy_admin_queue
+
+                UNION ALL
+
+                SELECT outcome, status FROM batch_job_records
+            ) combined
+            WHERE status NOT IN ('DRY_RUN', 'ERROR')
+        """)
+        row = cur.fetchone()
+        cur.close()
+        d = dict(row) if row else {
+            "total": 0, "approved": 0, "declined": 0, "referred": 0, "errored": 0
+        }
+        for k in d:
+            d[k] = int(d[k] or 0)
+
+        # STP rate = approved / (approved + declined + referred), excluding errors
+        decided = d["approved"] + d["declined"] + d["referred"]
+        d["stp_rate"] = round((d["approved"] / decided) * 100, 1) if decided > 0 else 0
+
+        return d
+    except Exception as e:
+        logger.error(f"dashboard_stats failed: {e}", exc_info=True)
+        return {"total": 0, "approved": 0, "declined": 0, "referred": 0, "errored": 0, "stp_rate": 0}
+    finally:
+        release(conn)
+
+
 # ── AI Score endpoint ─────────────────────────────────────────────────────────
 
 class AIScoreRequest(BaseModel):
@@ -705,11 +952,39 @@ def ai_score(body: AIScoreRequest, current: CurrentUser):
     Get AI risk assessment from chosen engine.
     Engines: xgboost (local ML), claude (Anthropic API), ollama (local LLM)
     """
-    from services.ai_score import get_ai_score
+    from services.ai_score import get_ai_score, log_ai_decision
     conn, release = _get_db()
     try:
         payload = body.model_dump()
         result  = get_ai_score(payload, engine=body.engine, conn=conn)
+
+        # ── AI Audit Trail ──────────────────────────────────────────────────
+        if not result.get("error"):
+            case_ref_id = None
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id FROM policy_admin_queue
+                    WHERE applicant_ref=%s ORDER BY decision_date DESC LIMIT 1
+                """, (body.applicant_ref,))
+                row = cur.fetchone()
+                cur.close()
+                if row:
+                    case_ref_id = (dict(row) if hasattr(row, "keys") else {"id": row[0]}).get("id")
+            except Exception:
+                conn.rollback()
+
+            log_ai_decision(
+                conn,
+                ai_result=result,
+                input_payload=payload,
+                source="EVALUATE",
+                case_ref_id=case_ref_id,
+                applicant_ref=body.applicant_ref,
+                product_code=body.product_code,
+                requested_by=current.username,
+            )
+
         return result
     except Exception as e:
         logger.error(f"AI score failed: {e}", exc_info=True)
@@ -717,3 +992,90 @@ def ai_score(body: AIScoreRequest, current: CurrentUser):
     finally:
         release(conn)
 
+
+# ── AI Audit Trail endpoint ───────────────────────────────────────────────────
+
+@router.get("/ai-audit")
+def ai_audit(
+    current: CurrentUser,
+    case_ref_id: int | None = None,
+    applicant_ref: str | None = None,
+    job_id: str | None = None,
+    engine: str = "ALL",
+    source: str = "ALL",
+    page_size: int = 50,
+    page: int = 1,
+):
+    """
+    List AI-assist decision logs for explainability/regulatory review.
+    Filter by case_ref_id, applicant_ref, job_id, engine, or source.
+    """
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        where, params = [], []
+        if case_ref_id is not None:
+            where.append("case_ref_id = %s"); params.append(case_ref_id)
+        if applicant_ref:
+            where.append("applicant_ref = %s"); params.append(applicant_ref)
+        if job_id:
+            where.append("job_id = %s"); params.append(job_id)
+        if engine != "ALL":
+            where.append("ai_engine = %s"); params.append(engine)
+        if source != "ALL":
+            where.append("source = %s"); params.append(source)
+
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        offset = (page - 1) * page_size
+
+        cur.execute(f"""
+            SELECT id, case_ref_id, job_id, applicant_ref, product_code, source,
+                   ai_engine, ai_model, risk_tier, risk_score, confidence,
+                   recommendation, primary_concerns, positive_factors,
+                   narrative, loading_suggestion, rules_outcome, rules_ndp,
+                   human_decision, human_decided_by, human_decided_at, matches_ai,
+                   requested_by, created_at
+            FROM ai_decision_log
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT %s OFFSET %s
+        """, params + [page_size, offset])
+        rows = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(f"SELECT COUNT(*) AS cnt FROM ai_decision_log {where_sql}", params)
+        total = dict(cur.fetchone())["cnt"]
+
+        # ── Summary stats: how often does human decision match AI? ───────────
+        cur.execute(f"""
+            SELECT
+                COUNT(*) FILTER (WHERE matches_ai IS NOT NULL)              AS reviewed,
+                COUNT(*) FILTER (WHERE matches_ai = true)                   AS matched,
+                COUNT(*) FILTER (WHERE matches_ai = false)                  AS overridden
+            FROM ai_decision_log
+            {where_sql}
+        """, params)
+        agreement = dict(cur.fetchone())
+
+        cur.close()
+
+        for r in rows:
+            r["risk_score"]  = float(r["risk_score"]) if r["risk_score"] is not None else None
+            r["confidence"]  = float(r["confidence"]) if r["confidence"] is not None else None
+            r["created_at"]  = str(r["created_at"]) if r["created_at"] else None
+            r["human_decided_at"] = str(r["human_decided_at"]) if r["human_decided_at"] else None
+
+        agreement_rate = (
+            round((agreement["matched"] or 0) / agreement["reviewed"] * 100, 1)
+            if agreement["reviewed"] else None
+        )
+
+        return {
+            "logs": rows,
+            "total": total,
+            "agreement": {**agreement, "agreement_rate": agreement_rate},
+        }
+    except Exception as e:
+        logger.error(f"ai_audit failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to load AI audit log: {e}")
+    finally:
+        release(conn)

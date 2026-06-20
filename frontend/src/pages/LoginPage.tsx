@@ -157,6 +157,7 @@ export default function LoginPage() {
       const user: AuthUser = {
         username:    data.username ?? values.username,
         role:        data.role ?? 'underwriter',
+        full_name:   data.full_name ?? '',
         token:       data.access_token,
         tenant_id:   data.tenant_id ?? '',
         tenant_name: data.tenant_name ?? '',
@@ -179,6 +180,7 @@ export default function LoginPage() {
       const user: AuthUser = {
         username:    data.username ?? mfaUsername,
         role:        data.role ?? 'underwriter',
+        full_name:   data.full_name ?? '',
         token:       data.access_token,
         tenant_id:   data.tenant_id ?? '',
         tenant_name: data.tenant_name ?? '',

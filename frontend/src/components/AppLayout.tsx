@@ -6,7 +6,9 @@ import {
   LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   UserOutlined, InboxOutlined, UploadOutlined, SwapOutlined,
   TeamOutlined, AppstoreOutlined, FunctionOutlined, SettingOutlined, BankOutlined,
-  ExportOutlined // <--- ADDED THIS HERE
+  ExportOutlined, // <--- ADDED THIS HERE
+  SolutionOutlined,
+  ApiOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../context/authStore'
 import { AuditOutlined } from '@ant-design/icons'
@@ -16,6 +18,8 @@ const NAV_MAIN = [
   { key: '/evaluate',    icon: <ThunderboltOutlined />,   label: 'Evaluate',    badge: 'DEMO' },
   { key: '/queue',       icon: <InboxOutlined />,         label: 'UW Queue' },
   { key: '/cases',       icon: <UnorderedListOutlined />, label: 'Cases' },
+  { key: '/workbench',   icon: <SolutionOutlined />,      label: 'Workbench' },
+  { key: '/integrations', icon: <ApiOutlined />,           label: 'Integrations' },
   { key: '/members',     icon: <UserOutlined />,          label: 'Members' },
   { key: '/batch',       icon: <UploadOutlined />,        label: 'Batch' },
   { key: '/reinsurance', icon: <SwapOutlined />,          label: 'Reinsurance' },

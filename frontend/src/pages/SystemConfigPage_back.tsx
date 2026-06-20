@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Table, Input, Button, Spin, message, Tag,
   Tabs, Switch, Form, Select, Divider, InputNumber,
@@ -13,13 +13,35 @@ import {
   CaretRightOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import PhysicianRegistryTab from './PhysicianRegistryTab'
+import { GSTModalConfigTab } from './GSTModalConfigTab'
+
+// ── sysApi: direct fetch helper for /system/* routes (not proxied via /api) ──
+const _tok = () => localStorage.getItem('riskuw_token') || ''
+const sysApi = {
+  get: (path: string, params?: Record<string,any>) => {
+    const url = new URL(path, window.location.origin)
+    if (params) Object.entries(params).forEach(([k,v]) => v != null && url.searchParams.set(k, String(v)))
+    return fetch(url.toString(), { headers: { Authorization: `Bearer ${_tok()}` } }).then(r => r.json())
+  },
+  post: (path: string, body?: any) =>
+    fetch(path, { method:'POST', headers: { Authorization:`Bearer ${_tok()}`, 'Content-Type':'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+  put: (path: string, body?: any) =>
+    fetch(path, { method:'PUT', headers: { Authorization:`Bearer ${_tok()}`, 'Content-Type':'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+  patch: (path: string, body?: any) =>
+    fetch(path, { method:'PATCH', headers: { Authorization:`Bearer ${_tok()}`, 'Content-Type':'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json()),
+  delete: (path: string) =>
+    fetch(path, { method:'DELETE', headers: { Authorization:`Bearer ${_tok()}` } }).then(r => r.json()),
+  postForm: (path: string, formData: FormData) =>
+    fetch(path, { method:'POST', headers: { Authorization:`Bearer ${_tok()}` }, body: formData }).then(r => r.json()),
+}
 
 const { Option } = Select
 const { TextArea } = Input
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface SysConfig { config_key: string; config_value: string; description?: string }
-interface StateCode { id?: number; state_code: string; state_name?: string; is_active: boolean }
+interface StateCode { id?: number; country_code: string; state_code: string; state_name?: string; is_active: boolean }
 interface LetterTemplate {
   id: string; template_name: string; outcome: string; is_active: boolean; version: number
   header_company_name?: string; header_tagline?: string
@@ -221,8 +243,8 @@ function CurrencyTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: st
             <Form.Item name="currency_symbol" label="Symbol">
               <Input maxLength={5} style={{ fontFamily:'var(--font-mono, monospace)', fontSize:16 }}/>
             </Form.Item>
-            <Form.Item name="currency_name" label="Name">
-              <Input/>
+            <Form.Item name="currency_name" label="Name" help="Full currency name displayed in reports">
+              <Input placeholder="e.g. Indian Rupee"/>
             </Form.Item>
           </div>
           {selCode && CURRENCIES[selCode] && (
@@ -259,15 +281,15 @@ function RateTablesTab() {
 
   const loadProducts = async () => {
     setLoading(true)
-    try { const r = await api.get('/system/rates/products'); setProducts(Array.isArray(r.data) ? r.data : r.data?.products || []) }
+    try { const r = await sysApi.get('/system/rates/products'); setProducts(Array.isArray(r) ? r : r?.products || []) }
     catch { setProducts([]) }
     finally { setLoading(false) }
   }
 
   const loadRates = async (prod: string) => {
     try {
-      const r = await api.get('/system/rates', { params: { product_code: prod } })
-      setRates(Array.isArray(r.data) ? r.data : r.data?.rates || [])
+      const r = await sysApi.get('/system/rates', { product_code: prod })
+      setRates(Array.isArray(r) ? r : r?.rates || [])
     } catch { setRates([]) }
   }
 
@@ -282,7 +304,7 @@ function RateTablesTab() {
 
   const deleteProduct = async (prod: string) => {
     try {
-      await api.delete(`/system/rates/product/${prod}`)
+      await sysApi.delete(`/system/rates/product/${prod}`)
       message.success(`Deleted all rates for ${prod}`)
       loadProducts(); setRates([])
     } catch { message.error('Delete failed') }
@@ -293,7 +315,7 @@ function RateTablesTab() {
     try {
       const v = addForm.getFieldsValue()
       if (!v.product_code) { message.error('Product code required'); return }
-      await api.post('/system/rates/add', { ...v, product_code: v.product_code.toUpperCase() })
+      await sysApi.post('/system/rates/add', { ...v, product_code: v.product_code.toUpperCase() })
       message.success('Rate added'); addForm.resetFields(); loadProducts()
       if (selProd === v.product_code.toUpperCase()) loadRates(selProd)
     } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
@@ -448,17 +470,15 @@ function UploadRatesTab() {
       if (!v.product_code?.trim()) { message.error('Product code required'); return }
       const fd = new FormData()
       fd.append('file', file)
-      const r = await api.post('/system/rates/upload-csv', fd, {
-        params: {
-          product_code:     v.product_code.trim().toUpperCase(),
-          replace_existing: v.replace_existing !== false,
-          effective_date:   v.effective_date || undefined,
-          expiry_date:      v.expiry_date    || undefined,
-        },
-        headers: { 'Content-Type': 'multipart/form-data' },
+      const params = new URLSearchParams({
+        product_code:     v.product_code.trim().toUpperCase(),
+        replace_existing: String(v.replace_existing !== false),
+        ...(v.effective_date && { effective_date: v.effective_date }),
+        ...(v.expiry_date    && { expiry_date:    v.expiry_date }),
       })
-      setResult(r.data)
-      message.success(`Uploaded ${r.data.inserted} rates for ${r.data.product_code}`)
+      const r = await sysApi.postForm(`/system/rates/upload-csv?${params}`, fd)
+      setResult(r)
+      message.success(`Uploaded ${r.inserted} rates for ${r.product_code}`)
     } catch(e:any) { message.error(e?.response?.data?.detail || 'Upload failed') }
     finally { setUp(false) }
     return false
@@ -627,7 +647,7 @@ function TemplateForm({
       </div>
       <div style={card}>
         <div style={secTitle}>Footer</div>
-        <Form.Item name="footer_text" label="Footer Text"><TextArea rows={3}/></Form.Item>
+        <Form.Item name="footer_text" label="Footer Text" help="Appears at the bottom of all letters — include IRDAI registration, grievance officer details, etc."><TextArea rows={3} placeholder="e.g. IRDAI Reg. No. 123 | Grievance Officer: grievance@carrier.com | 1800-xxx-xxxx"/></Form.Item>
       </div>
       <div style={{ display:'flex', gap:10 }}>
         <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={submit}>
@@ -653,14 +673,14 @@ function LetterTemplatesTab() {
 
   const load = async () => {
     setLoading(true)
-    try { const r = await api.get('/system/letter-templates'); setTemplates(Array.isArray(r.data) ? r.data : []) }
+    try { const r = await sysApi.get('/system/letter-templates'); setTemplates(Array.isArray(r) ? r : []) }
     catch { setTemplates([]) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
 
   const setActive = async (t: LetterTemplate) => {
-    try { await api.patch(`/system/letter-templates/${t.id}`, { is_active: true }); message.success('Set as active'); load() }
+    try { await sysApi.patch(`/system/letter-templates/${t.id}`, { is_active: true }); message.success('Set as active'); load() }
     catch { message.error('Failed') }
   }
 
@@ -668,10 +688,10 @@ function LetterTemplatesTab() {
     setSaving(true)
     try {
       if (editTpl) {
-        await api.put(`/system/letter-templates/${editTpl.id}`, payload)
+        await sysApi.put(`/system/letter-templates/${editTpl.id}`, payload)
         message.success('Template updated'); setEditTpl(null); setSubTab('list')
       } else {
-        await api.post('/system/letter-templates', payload)
+        await sysApi.post('/system/letter-templates', payload)
         message.success(`Template "${payload.template_name}" created`); setSubTab('list')
       }
       load()
@@ -680,7 +700,7 @@ function LetterTemplatesTab() {
   }
 
   const doDelete = async (id: string) => {
-    try { await api.delete(`/system/letter-templates/${id}`); message.success('Deleted'); setEditTpl(null); setSubTab('list'); load() }
+    try { await sysApi.delete(`/system/letter-templates/${id}`); message.success('Deleted'); setEditTpl(null); setSubTab('list'); load() }
     catch { message.error('Delete failed') }
   }
 
@@ -773,19 +793,19 @@ function SMTPTab() {
   const [smtpStatus, setStatus] = useState<{host?:string; port?:string; from_email?:string} | null>(null)
 
   useEffect(() => {
-    api.get('/system/smtp').then(r => {
-      form.setFieldsValue(r.data)
-      if (r.data?.host) setStatus(r.data)
+    sysApi.get('/system/smtp').then(r => {
+      form.setFieldsValue(r)
+      if (r?.host) setStatus(r)
     }).catch(() => {})
   }, [])
 
   const save = async () => {
     setSaving(true)
     try {
-      await api.post('/system/smtp', form.getFieldsValue())
+      await sysApi.post('/system/smtp', form.getFieldsValue())
       message.success('SMTP settings saved')
-      const r = await api.get('/system/smtp')
-      if (r.data?.host) setStatus(r.data)
+      const r = await sysApi.get('/system/smtp')
+      if (r?.host) setStatus(r)
     }
     catch { message.error('Failed to save SMTP') }
     finally { setSaving(false) }
@@ -796,7 +816,7 @@ function SMTPTab() {
     if (!v.smtp_host) { message.warning('Enter SMTP Host first'); return }
     setConn(true)
     try {
-      await api.post('/system/smtp/test-connection', form.getFieldsValue())
+      await sysApi.post('/system/smtp/test-connection', form.getFieldsValue())
       message.success('✅ SMTP connection successful!')
     } catch(e:any) { message.error('Connection failed: ' + (e?.response?.data?.detail || e.message)) }
     finally { setConn(false) }
@@ -805,7 +825,7 @@ function SMTPTab() {
   const sendTest = async () => {
     if (!testEmail) { message.warning('Enter an email address'); return }
     setTesting(true)
-    try { await api.post('/system/smtp/test', { to_email: testEmail }); message.success('Test email sent — check your inbox') }
+    try { await sysApi.post('/system/smtp/test', { to_email: testEmail }); message.success('Test email sent — check your inbox') }
     catch { message.error('Failed to send test email') }
     finally { setTesting(false) }
   }
@@ -1043,7 +1063,7 @@ function ErrorCodesTab() {
 
   const load = async () => {
     setLoading(true)
-    try { const r = await api.get('/system/error-codes'); setCodes(Array.isArray(r.data) ? r.data : []) }
+    try { const r = await sysApi.get('/system/error-codes'); setCodes(Array.isArray(r) ? r : []) }
     catch { setCodes([]) }
     finally { setLoading(false) }
   }
@@ -1052,7 +1072,7 @@ function ErrorCodesTab() {
   const add = async () => {
     setSaving(true)
     try {
-      await api.post('/system/error-codes', form.getFieldsValue())
+      await sysApi.post('/system/error-codes', form.getFieldsValue())
       message.success('Error code added'); setAddOpen(false); form.resetFields(); load()
     } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
     finally { setSaving(false) }
@@ -1087,8 +1107,8 @@ function ErrorCodesTab() {
               <Select><Option value="ERROR">ERROR</Option><Option value="WARNING">WARNING</Option><Option value="INFO">INFO</Option></Select>
             </Form.Item>
           </div>
-          <Form.Item name="message"    label="Message"    rules={[{required:true}]}><Input/></Form.Item>
-          <Form.Item name="resolution" label="Resolution"><Input/></Form.Item>
+          <Form.Item name="message"    label="Message"    rules={[{required:true}]} help="Human-readable error shown to the agent or system"><Input placeholder="e.g. Date of birth is missing or invalid"/></Form.Item>
+          <Form.Item name="resolution" label="Resolution" help="Suggested fix — shown alongside the error to help agents self-resolve"><Input placeholder="e.g. Enter DOB in DD-MM-YYYY format"/></Form.Item>
         </Form>
       </Modal>
     </div>
@@ -1102,49 +1122,137 @@ function StateCodesTab() {
   const [states, setStates]   = useState<StateCode[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
+  const [country, setCountry] = useState('IN')
+  const [addOpen, setAddOpen] = useState(false)
+  const [saving, setSaving]   = useState(false)
+  const [form] = Form.useForm()
 
   const load = async () => {
     setLoading(true)
-    try { const r = await api.get('/system/states'); setStates(Array.isArray(r.data) ? r.data : []) }
-    catch { setStates([]) }
+    try {
+      const r = await api.get('/system/states', { params: { all: true } })
+      setStates(Array.isArray(r.data) ? r.data : [])
+    } catch { setStates([]) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
 
+  const countries = [...new Set(states.map(s => s.country_code))].sort()
+
   const filtered = states.filter(s =>
-    !search || s.state_code.toLowerCase().includes(search.toLowerCase()) ||
-    (s.state_name||'').toLowerCase().includes(search.toLowerCase())
+    (!country || s.country_code === country) &&
+    (!search ||
+      s.state_code.toLowerCase().includes(search.toLowerCase()) ||
+      (s.state_name||'').toLowerCase().includes(search.toLowerCase()))
   )
 
+  const loadPreset = async () => {
+    try {
+      await api.post('/system/states/load-preset', { country_code: country })
+      message.success(`State codes loaded for ${country}`)
+      load()
+    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
+  }
+
+  const saveAdd = async () => {
+    setSaving(true)
+    try {
+      const vals = form.getFieldsValue()
+      await api.post('/system/states', vals)
+      message.success('State code added')
+      setAddOpen(false); form.resetFields(); load()
+    } catch(e:any) { message.error(e?.response?.data?.detail || 'Failed') }
+    finally { setSaving(false) }
+  }
+
+  const toggleActive = async (row: StateCode) => {
+    try {
+      await api.put(`/system/states/${row.id}`, { ...row, is_active: !row.is_active })
+      load()
+    } catch { message.error('Failed') }
+  }
+
+  const deleteState = async (id?: number) => {
+    if (!id) return
+    try { await api.delete(`/system/states/${id}`); message.success('Deleted'); load() }
+    catch { message.error('Failed') }
+  }
+
   const cols = [
-    { title:'Code',  dataIndex:'state_code',  width:80, render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color:'#00d4aa' }}>{v}</span> },
-    { title:'State Name', dataIndex:'state_name' },
-    { title:'Active',dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'error'}>{v?'Active':'Inactive'}</Tag> },
+    { title:'Country', dataIndex:'country_code', width:80 },
+    { title:'Code', dataIndex:'state_code', width:80,
+      render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color:'#00d4aa' }}>{v}</span> },
+    { title:'State / Province', dataIndex:'state_name' },
+    { title:'Active', dataIndex:'is_active', width:80,
+      render:(v:boolean, row:StateCode) =>
+        <Switch size="small" checked={v} onChange={() => toggleActive(row)} /> },
+    { title:'', width:50,
+      render:(_:any, row:StateCode) => (
+        <Popconfirm title="Delete this state code?" onConfirm={() => deleteState(row.id)}>
+          <Button size="small" danger icon={<DeleteOutlined/>} />
+        </Popconfirm>
+      )
+    }
   ]
 
   return (
     <div>
-      <div style={{ display:'flex', gap:10, marginBottom:16, alignItems:'center' }}>
+      {/* Toolbar */}
+      <div style={{ display:'flex', gap:10, marginBottom:16, alignItems:'center', flexWrap:'wrap' }}>
+        <Select value={country} onChange={setCountry} style={{ width:100 }}>
+          {(countries.length ? countries : ['IN']).map(c =>
+            <Option key={c} value={c}>{c}</Option>)}
+        </Select>
         <Input prefix={<EnvironmentOutlined style={{ color:'#6b7280' }}/>}
-          placeholder="Search codes…" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ maxWidth:240 }} allowClear/>
-        <span style={{ fontSize:13, color:'#6b7280' }}>{filtered.length} of {states.length} state codes</span>
-        <Button icon={<ReloadOutlined/>} onClick={load} loading={loading} style={{ marginLeft:'auto' }}/>
+          placeholder="Search state…" value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ maxWidth:220 }} allowClear/>
+        <span style={{ fontSize:13, color:'#6b7280' }}>
+          {filtered.length} / {states.length} codes
+        </span>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          <Button onClick={load} icon={<ReloadOutlined/>} loading={loading} />
+          <Button onClick={loadPreset}>📥 Load {country} Preset</Button>
+          <Button type="primary" icon={<PlusOutlined/>}
+            onClick={() => {
+              form.resetFields()
+              form.setFieldsValue({ country_code:'IN', is_active:true })
+              setAddOpen(true)
+            }}>
+            Add Code
+          </Button>
+        </div>
       </div>
+
       {loading
         ? <Spin/>
-        : states.length === 0
-          ? (
-            <div style={{ color:'#6b7280', padding:'24px 0', fontSize:13 }}>
-              No state codes found. Run <code style={{ background:'rgba(255,255,255,0.06)', padding:'2px 8px', borderRadius:4, fontFamily:'var(--font-mono, monospace)' }}>
-                python scripts/admin/create_tenant.py --demo
-              </code> to seed them.
-            </div>
-          ) : (
-            <Table dataSource={filtered} columns={cols} rowKey="state_code" size="small"
-              pagination={{ pageSize:25, showSizeChanger:false }} scroll={{ y:400 }}/>
-          )
+        : <Table dataSource={filtered} columns={cols} rowKey="id" size="small"
+            pagination={{ pageSize:25, showSizeChanger:false }} scroll={{ y:400 }}/>
       }
+
+      <Modal title="Add State Code" open={addOpen}
+        onOk={saveAdd} onCancel={() => setAddOpen(false)}
+        okText="Add" confirmLoading={saving}>
+        <Form form={form} layout="vertical" style={{ marginTop:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <Form.Item name="country_code" label="Country Code"
+              rules={[{required:true}]}>
+              <Input placeholder="IN" maxLength={2} />
+            </Form.Item>
+            <Form.Item name="state_code" label="State Code"
+              rules={[{required:true}]}>
+              <Input placeholder="MH" maxLength={3} />
+            </Form.Item>
+          </div>
+          <Form.Item name="state_name" label="State / Province Name"
+            rules={[{required:true}]}>
+            <Input placeholder="Maharashtra" />
+          </Form.Item>
+          <Form.Item name="is_active" label="Active" valuePropName="checked">
+            <Switch defaultChecked />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }
@@ -1639,40 +1747,93 @@ function UserLabelModal({
   onSave: (l: UserLabel) => Promise<void>
   onClose: () => void
 }) {
-  const [label, setLabel]   = useState<UserLabel>(initial || emptyLabel())
-  const [saving, setSaving] = useState(false)
+  const [label, setLabel]         = useState<UserLabel>(initial || emptyLabel())
+  const [saving, setSaving]       = useState(false)
+  const [keyStatus, setKeyStatus] = useState<'idle'|'checking'|'ok'|'duplicate'>('idle')
+  const keyInputRef               = useRef<HTMLInputElement>(null)
+  const prevOpen                  = useRef(false)
 
+  // Only reset when modal transitions from closed → open
   useEffect(() => {
-    setLabel(initial || emptyLabel())
-  }, [initial, open])
+    if (open && !prevOpen.current) {
+      const fresh = initial || emptyLabel()
+      setLabel(fresh)
+      setKeyStatus('idle')
+      // Use setTimeout to ensure Modal has finished rendering before we set the value
+      setTimeout(() => {
+        if (keyInputRef.current) keyInputRef.current.value = fresh.label_key
+      }, 0)
+    }
+    prevOpen.current = open
+  }, [open])  // intentionally NOT watching `initial` — only open transition matters
+
+  const handleKeyBlur = async () => {
+    if (label.id) return
+    const raw = keyInputRef.current?.value ?? ''
+    const key = raw.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+    // Show sanitised value in the box
+    if (keyInputRef.current) keyInputRef.current.value = key
+    if (!key || !/^[a-z][a-z0-9_]*$/.test(key)) {
+      setKeyStatus('idle')
+      return
+    }
+    setKeyStatus('checking')
+    try {
+      const r = await sysApi.get('/system/user-labels/check-key', { key })
+      setKeyStatus(r.exists ? 'duplicate' : 'ok')
+    } catch {
+      setKeyStatus('idle')
+    }
+  }
 
   const handleTypeChange = (type: string) => {
     const t = DATA_TYPES.find(d => d.value === type)
-    setLabel(l => ({
-      ...l,
-      data_type: type,
-      prefix: t?.prefix || '',
-      suffix: t?.suffix || '',
-    }))
+    setLabel(l => ({ ...l, data_type: type, prefix: t?.prefix || '', suffix: t?.suffix || '' }))
   }
 
   const handleSave = async () => {
-    if (!label.label_key.trim()) { message.error('Label key is required'); return }
+    // Read key directly from DOM - source of truth
+    const raw = keyInputRef.current?.value ?? label.label_key
+    const key = raw.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+    if (!key.trim()) { message.error('Label key is required'); return }
     if (!label.label_name.trim()) { message.error('Label name is required'); return }
-    if (!/^[a-z][a-z0-9_]*$/.test(label.label_key)) {
-      message.error('Label key must be lowercase letters, numbers, underscores only (e.g. rider_sa)')
+    if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+      message.error('Label key must be lowercase letters, numbers, underscores only')
       return
     }
+    if (keyStatus === 'duplicate') {
+      message.error(`Label key "${key}" already exists — choose a different key`)
+      return
+    }
+    if (keyStatus === 'checking') {
+      message.warning('Still validating label key, please wait a moment')
+      return
+    }
+    // If user never blurred the field, validate now before saving
+    if (keyStatus === 'idle' && !label.id) {
+      setKeyStatus('checking')
+      try {
+        const r = await sysApi.get('/system/user-labels/check-key', { key })
+        if (r.exists) {
+          setKeyStatus('duplicate')
+          message.error(`Label key "${key}" already exists — choose a different key`)
+          return
+        }
+        setKeyStatus('ok')
+      } catch { /* proceed, backend will catch */ }
+    }
     setSaving(true)
-    try { await onSave({
-      ...label,
-      expiry_date:   label.expiry_date   || undefined,
-      default_value: label.default_value || undefined,
-      description:   label.description   || undefined,
-      prefix:        label.prefix        || undefined,
-      suffix:        label.suffix        || undefined,
-    }) }
-    catch (e: any) { message.error(e?.message || 'Save failed') }
+    try {
+      await onSave({
+        ...label,
+        label_key:     key,
+        expiry_date:   label.expiry_date   || undefined,
+        default_value: label.default_value || undefined,
+        description:   label.description   || undefined,
+        prefix:        label.prefix        || undefined,
+        suffix:        label.suffix        || undefined,
+      })
+    } catch (e: any) { message.error(e?.message || 'Save failed') }
     finally { setSaving(false) }
   }
 
@@ -1680,6 +1841,7 @@ function UserLabelModal({
     <Modal
       title={<span style={{ color: '#e2e8f0' }}>{label.id ? 'Edit User Label' : 'Create User Label'}</span>}
       open={open} onCancel={onClose} width={640} styles={MS}
+      destroyOnClose={false}
       footer={[
         <Button key="c" onClick={onClose}>Cancel</Button>,
         <Button key="s" type="primary" icon={<SaveOutlined/>} loading={saving} onClick={handleSave}>
@@ -1689,18 +1851,37 @@ function UserLabelModal({
     >
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
 
-        {/* Label Key */}
+        {/* Label Key — raw <input>, no controlled state, no onChange re-renders */}
         <div>
           <div style={fieldLabel}>Label Key * <span style={{ color: '#4b5563', fontWeight: 400 }}>(machine name)</span></div>
-          <Input
-            value={label.label_key}
-            onChange={e => setLabel(l => ({ ...l, label_key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') }))}
-            placeholder="e.g. rider_sa"
-            disabled={!!label.id}
-          />
-          <div style={{ fontSize: 10, color: '#4b5563', marginTop: 3 }}>
-            Lowercase, underscores only. Used in formula steps and CSV columns.
+          <div style={{ position: 'relative' }}>
+            <input
+              ref={keyInputRef}
+              onBlur={handleKeyBlur}
+              placeholder="e.g. rider_sa"
+              disabled={!!label.id}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: label.id ? '#111827' : '#1f2937',
+                border: `1px solid ${keyStatus === 'duplicate' ? '#f87171' : keyStatus === 'ok' ? '#4ade80' : 'rgba(255,255,255,0.15)'}`,
+                borderRadius: 6, padding: '4px 32px 4px 11px', height: 32,
+                color: '#e2e8f0', fontSize: 14, outline: 'none',
+                cursor: label.id ? 'not-allowed' : 'text',
+                opacity: label.id ? 0.5 : 1,
+              }}
+            />
+            <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', lineHeight: 1, pointerEvents: 'none' }}>
+              {keyStatus === 'checking'  && <Spin size="small" />}
+              {keyStatus === 'ok'        && <span style={{ color: '#4ade80', fontSize: 14 }}>✓</span>}
+              {keyStatus === 'duplicate' && <span style={{ color: '#f87171', fontSize: 14 }}>✗</span>}
+            </span>
           </div>
+          {keyStatus === 'duplicate'
+            ? <div style={{ fontSize: 11, color: '#f87171', marginTop: 3 }}>This key already exists — choose a different one</div>
+            : keyStatus === 'ok'
+            ? <div style={{ fontSize: 11, color: '#4ade80', marginTop: 3 }}>Key is available ✓</div>
+            : <div style={{ fontSize: 10, color: '#4b5563', marginTop: 3 }}>Lowercase, underscores only. Used in formula steps and CSV columns.</div>
+          }
         </div>
 
         {/* Label Name */}
@@ -1846,8 +2027,8 @@ function UserLabelsTab() {
   const load = async () => {
     setLoading(true)
     try {
-      const r = await api.get('/system/user-labels', { params: { active_only: activeOnly } })
-      setLabels(Array.isArray(r.data) ? r.data : [])
+      const r = await sysApi.get('/system/user-labels', { active_only: activeOnly })
+      setLabels(Array.isArray(r) ? r : [])
     } catch { message.error('Failed to load user labels') }
     finally { setLoading(false) }
   }
@@ -1856,10 +2037,10 @@ function UserLabelsTab() {
 
   const handleSave = async (label: UserLabel) => {
     if (label.id) {
-      await api.put(`/system/user-labels/${label.id}`, label)
+      await sysApi.put(`/system/user-labels/${label.id}`, label)
       message.success('Label updated')
     } else {
-      await api.post('/system/user-labels', label)
+      await sysApi.post('/system/user-labels', label)
       message.success('Label created')
     }
     setModalOpen(false)
@@ -1869,7 +2050,7 @@ function UserLabelsTab() {
 
   const handleDelete = async (id: string, name: string) => {
     try {
-      await api.delete(`/system/user-labels/${id}`)
+      await sysApi.delete(`/system/user-labels/${id}`)
       message.success(`Deleted: ${name}`)
       load()
     } catch (e: any) { message.error(e?.response?.data?.detail || 'Delete failed') }
@@ -2016,8 +2197,8 @@ export default function SystemConfigPage() {
   const load = async () => {
     setLoading(true)
     try {
-      const r = await api.get('/system/config')
-      sray.isArray(r.data) ? r.data : [])
+      const r = await sysApi.get('/system/config')
+      setConfigs(Array.isArray(r) ? r : [])
     } catch { message.error('Failed to load system config') }
     finally { setLoading(false) }
   }
@@ -2025,7 +2206,7 @@ export default function SystemConfigPage() {
 
   const saveConfig = async (key: string, value: string) => {
     try {
-      await api.post('/system/config', { config_key: key, config_value: value })
+      await sysApi.post('/system/config', { config_key: key, config_value: value })
       message.success(`${key} updated`)
       setConfigs(prev => {
         const idx = prev.findIndex(c => c.config_key === key)
@@ -2058,8 +2239,8 @@ export default function SystemConfigPage() {
   const referenceDataTabs = [
     {
       key: 'error-codes',
-      label: <span><WarningOutlined/> Error Codes</span>,
-      children: <ErrorCodesTab/>,
+      label: <span>⚠️ Error Codes</span>,
+      children: <ErrorCodesTab />,
     },
     {
       key: 'state-codes',
@@ -2111,7 +2292,7 @@ export default function SystemConfigPage() {
       label: <span>📋 Reference Data</span>,
       children: (
         <Tabs
-          defaultActiveKey="error-codes"
+          defaultActiveKey="general"
           items={referenceDataTabs}
           size="small"
           tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:20 }}
@@ -2128,11 +2309,25 @@ export default function SystemConfigPage() {
       label: <span>🏷️ User Labels</span>,
       children: <UserLabelsTab/>,
     },
+    {
+      key: 'gst-modal',
+      label: <span>💰 GST & Modal Factors</span>,
+      children: (
+        <div style={{ padding: '8px 0' }}>
+          <GSTModalConfigTab />
+        </div>
+      ),
+    },
+    {
+      key: 'physicians',
+      label: <span>🩺 Physician Registry</span>,
+      children: <PhysicianRegistryTab />,
+    },
   ]
 
   return (
     <div style={{ padding:'32px 36px' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom}}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
         <div>
           <h1 style={{ fontWeight:700, fontSize:20, color:'#e2e8f0', margin:0, letterSpacing:'-0.02em', display:'flex', alignItems:'center', gap:10 }}>
             <SettingOutlined style={{ color:'#00d4aa' }}/>System Configuration
@@ -2141,7 +2336,7 @@ export default function SystemConfigPage() {
             Platform settings · SMTP · rate scales · currency · reference data · user labels
           </p>
         </div>
-        <Button icon={<ReloadOutlin onClick={load} loading={loading}
+        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}
           style={{ borderColor:'rgba(255,255,255,0.12)', color:'#9ca3af' }}>Refresh</Button>
       </div>
 

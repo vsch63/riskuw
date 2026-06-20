@@ -18,10 +18,20 @@ import AuditLogPage from './pages/AuditLogPage'
 import MembersPage from './pages/MembersPage'
 import DebitScalePage from './pages/DebitScalePage'
 import MyAccountPage from './pages/MyAccountPage'
+import WorkbenchPage from './pages/WorkbenchPage'
+import AgentPortalPage from './pages/AgentPortalPage'
+import IntegrationsPage from './pages/IntegrationsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user)
   return user ? <>{children}</> : <Navigate to="/login" replace />
+}
+
+function RequireUW({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((s) => s.user)
+  if (!user) return <Navigate to="/login" replace />
+  if (user.role === 'agent' || user.role === 'broker') return <Navigate to="/agent-portal" replace />
+  return <>{children}</>
 }
 
 export default function App() {
@@ -30,9 +40,10 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
-        <Route path="/" element={<RequireAuth><AppLayout /></RequireAuth>}>
+        <Route path="/" element={<RequireUW><AppLayout /></RequireUW>}>
           <Route index element={<DashboardPage />} />
           <Route path="evaluate"       element={<EvaluatePage />} />
+          <Route path="/workbench" element={<WorkbenchPage />} />
           <Route path="queue"          element={<QueuePage />} />
           <Route path="cases"          element={<CasesPage />} />
           <Route path="batch"          element={<BatchJobsPage />} />
@@ -46,8 +57,14 @@ export default function App() {
           <Route path="output-interface" element={<OutputInterfacePage />} />
           <Route path="audit"   element={<AuditLogPage />} />
           <Route path="members" element={<MembersPage />} />
+          <Route path="/integrations" element={<IntegrationsPage />} />
           <Route path="/my-account" element={<MyAccountPage />} />
         </Route>
+        <Route path="/agent-portal" element={
+          <RequireAuth>
+            <AgentPortalPage/>
+          </RequireAuth>
+        }/>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

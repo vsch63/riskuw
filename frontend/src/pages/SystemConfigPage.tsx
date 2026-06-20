@@ -2188,7 +2188,192 @@ function UserLabelsTab() {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════E SHELL
+// ══════════════════════════════════════════════════════════════════════════════
+// AI Audit Tab
+// ══════════════════════════════════════════════════════════════════════════════
+function AIAuditTab() {
+  const [logs, setLogs]           = useState<any[]>([])
+  const [agreement, setAgreement] = useState<any>({})
+  const [loading, setLoading]     = useState(true)
+  const [engine, setEngine]       = useState('ALL')
+  const [source, setSource]       = useState('ALL')
+  const [search, setSearch]       = useState('')
+  const [total, setTotal]         = useState(0)
+  const [page, setPage]           = useState(1)
+
+  const load = () => {
+    setLoading(true)
+    sysApi.get('/underwriting/ai-audit', { engine, source, page_size: 50, page })
+      .then(d => {
+        setLogs(Array.isArray(d?.logs) ? d.logs : [])
+        setTotal(d?.total ?? 0)
+        setAgreement(d?.agreement ?? {})
+      })
+      .catch(() => setLogs([]))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [engine, source, page])
+
+  const filtered = search
+    ? logs.filter(l =>
+        (l.applicant_ref || '').toLowerCase().includes(search.toLowerCase()) ||
+        (l.product_code  || '').toLowerCase().includes(search.toLowerCase()) ||
+        (l.engine        || '').toLowerCase().includes(search.toLowerCase())
+      )
+    : logs
+
+  const TIER_COLOR: Record<string,string> = {
+    STANDARD:'#22c55e', SUBSTANDARD:'#f59e0b', RATED:'#f97316', DECLINED:'#ef4444'
+  }
+  const ENGINE_LABEL: Record<string,string> = {
+    xgboost:'⚡ XGBoost', claude:'🧠 Claude', ollama:'🦙 Ollama'
+  }
+  const SOURCE_LABEL: Record<string,string> = {
+    EVALUATE:'🖥️ Evaluate', BATCH:'📦 Batch', WORKBENCH:'🗂️ Workbench'
+  }
+
+  const statCard = (label: string, value: any, color: string) => (
+    <div style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)',
+      borderRadius:10, padding:'14px 20px', textAlign:'center', flex:1 }}>
+      <div style={{ fontSize:22, fontWeight:700, color, fontFamily:'var(--font-mono,monospace)' }}>{value ?? '—'}</div>
+      <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>{label}</div>
+    </div>
+  )
+
+  const agreementRate = agreement?.agreement_rate
+  const rateColor = agreementRate == null ? '#6b7280'
+    : agreementRate >= 80 ? '#22c55e'
+    : agreementRate >= 60 ? '#fbbf24' : '#ef4444'
+
+  const columns = [
+    { title:'Time', dataIndex:'created_at', width:130,
+      render:(v:string) => <span style={{ fontSize:11, color:'#6b7280', fontFamily:'var(--font-mono,monospace)' }}>{v?.slice(0,16).replace('T',' ')}</span> },
+    { title:'Source', dataIndex:'source', width:120,
+      render:(v:string) => <Tag style={{ fontSize:10 }}>{SOURCE_LABEL[v]||v}</Tag> },
+    { title:'Engine', dataIndex:'engine', width:120,
+      render:(v:string) => <Tag style={{ fontSize:10, color:'#00d4aa', borderColor:'rgba(0,212,170,0.3)', background:'rgba(0,212,170,0.08)' }}>{ENGINE_LABEL[v]||v}</Tag> },
+    { title:'Applicant', dataIndex:'applicant_ref', width:130,
+      render:(v:string, r:any) => (
+        <div>
+          <div style={{ fontSize:12, color:'#e2e8f0', fontFamily:'var(--font-mono,monospace)' }}>{v}</div>
+          <div style={{ fontSize:10, color:'#6b7280' }}>{r.product_code}</div>
+        </div>
+      ) },
+    { title:'Risk Tier', dataIndex:'risk_tier', width:110,
+      render:(v:string) => v ? (
+        <Tag style={{ color:TIER_COLOR[v]||'#9ca3af', borderColor:(TIER_COLOR[v]||'#9ca3af')+'40',
+          background:(TIER_COLOR[v]||'#9ca3af')+'15', fontSize:10 }}>{v}</Tag>
+      ) : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'Score', dataIndex:'risk_score', width:70,
+      render:(v:number) => v!=null ? <span style={{ fontFamily:'var(--font-mono,monospace)', fontSize:12, color:'#fbbf24' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'AI Rec.', dataIndex:'recommendation', width:100,
+      render:(v:string) => v ? (
+        <Tag color={v==='APPROVE'?'success':v==='DECLINE'?'error':'warning'} style={{ fontSize:10 }}>{v}</Tag>
+      ) : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'Rules Outcome', dataIndex:'rules_outcome', width:140,
+      render:(v:string) => v ? <span style={{ fontSize:11, color:'#9ca3af' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'Human Decision', dataIndex:'human_decision', width:150,
+      render:(v:string) => v ? (
+        <Tag color={v.includes('APPROV')?'success':v.includes('DECLIN')?'error':'default'} style={{ fontSize:10 }}>{v}</Tag>
+      ) : <span style={{ fontSize:11, color:'#4b5563' }}>Pending</span> },
+    { title:'Match', dataIndex:'matches_ai', width:90,
+      render:(v:boolean|null) => v===null||v===undefined
+        ? <span style={{ color:'#4b5563', fontSize:11 }}>—</span>
+        : v ? <span style={{ color:'#22c55e', fontSize:12 }}>✓ Match</span>
+            : <span style={{ color:'#ef4444', fontSize:12 }}>✗ Override</span> },
+    { title:'By', dataIndex:'requested_by', width:100,
+      render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v||'—'}</span> },
+  ]
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+        {statCard('Total AI Calls', total, '#00d4aa')}
+        {statCard('Human Reviewed', agreement?.reviewed ?? 0, '#60a5fa')}
+        {statCard('AI Matched', agreement?.matched ?? 0, '#22c55e')}
+        {statCard('Human Override', agreement?.overridden ?? 0, '#f87171')}
+        {statCard('Agreement Rate', agreementRate!=null ? `${agreementRate}%` : '—', rateColor)}
+      </div>
+
+      {agreementRate!=null && (
+        <div style={{ background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.07)',
+          borderRadius:8, padding:'10px 16px', marginBottom:16, fontSize:12, color:'#9ca3af' }}>
+          {agreementRate>=80
+            ? `✅ Underwriters agree with AI recommendations ${agreementRate}% of the time — AI calibration is strong.`
+            : agreementRate>=60
+            ? `⚠️ Underwriters override AI ${100-agreementRate}% of the time — consider reviewing AI model calibration.`
+            : `🔴 High override rate (${100-agreementRate}%) — AI recommendations may need tuning.`}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:10, marginBottom:14 }}>
+        <Input placeholder="Search applicant, product..." value={search}
+          onChange={e => setSearch(e.target.value)} style={{ maxWidth:260 }} size="small" allowClear/>
+        <Select value={engine} onChange={v => { setEngine(v); setPage(1) }} size="small" style={{ width:160 }}>
+          <Select.Option value="ALL">All engines</Select.Option>
+          <Select.Option value="xgboost">⚡ XGBoost</Select.Option>
+          <Select.Option value="claude">🧠 Claude</Select.Option>
+          <Select.Option value="ollama">🦙 Ollama</Select.Option>
+        </Select>
+        <Select value={source} onChange={v => { setSource(v); setPage(1) }} size="small" style={{ width:170 }}>
+          <Select.Option value="ALL">All sources</Select.Option>
+          <Select.Option value="EVALUATE">🖥️ Single Evaluate</Select.Option>
+          <Select.Option value="BATCH">📦 Batch</Select.Option>
+          <Select.Option value="WORKBENCH">🗂️ Workbench</Select.Option>
+        </Select>
+        <Button size="small" onClick={load}>🔄 Refresh</Button>
+      </div>
+
+      {loading ? <div style={{ textAlign:'center', padding:40 }}><Spin/></div> : (
+        <Table
+          dataSource={filtered}
+          columns={columns}
+          rowKey="id"
+          size="small"
+          scroll={{ x:1300 }}
+          pagination={{ pageSize:50, current:page, total, onChange:p => setPage(p), showTotal:t => `${t} AI calls` }}
+          expandable={{
+            expandedRowRender:(r:any) => (
+              <div style={{ padding:'12px 16px', background:'rgba(0,0,0,0.2)', borderRadius:6 }}>
+                {r.narrative && (
+                  <div style={{ marginBottom:10 }}>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>AI Narrative</div>
+                    <div style={{ fontSize:12, color:'#9ca3af', lineHeight:1.6 }}>{r.narrative}</div>
+                  </div>
+                )}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+                  <div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Concerns</div>
+                    {(typeof r.primary_concerns==='string' ? JSON.parse(r.primary_concerns||'[]') : r.primary_concerns||[])
+                      .map((c:string,i:number) => <div key={i} style={{ fontSize:11, color:'#f87171' }}>⚠ {c}</div>)}
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Positives</div>
+                    {(typeof r.positive_factors==='string' ? JSON.parse(r.positive_factors||'[]') : r.positive_factors||[])
+                      .map((f:string,i:number) => <div key={i} style={{ fontSize:11, color:'#22c55e' }}>✓ {f}</div>)}
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Loading Suggestion</div>
+                    <div style={{ fontSize:11, color:'#9ca3af' }}>{r.loading_suggestion||'—'}</div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginTop:8 }}>Confidence: {r.confidence!=null ? `${Math.round(r.confidence*100)}%`:'—'}</div>
+                    {r.human_decided_at && <div style={{ fontSize:10, color:'#6b7280', marginTop:4 }}>Decided: {r.human_decided_at?.slice(0,16)} by {r.human_decided_by}</div>}
+                  </div>
+                </div>
+              </div>
+            ),
+            rowExpandable:(r:any) => !!(r.narrative||r.primary_concerns||r.positive_factors),
+          }}
+          locale={{ emptyText:<div style={{ color:'#6b7280', padding:24 }}>No AI decisions logged yet. Use the AI Assist feature in Evaluate or Batch to generate entries.</div> }}
+        />
+      )}
+    </div>
+  )
+}
+
+
 // ══════════════════════════════════════════════════════════════════════════════
 export default function SystemConfigPage() {
   const [configs, setConfigs] = useState<SysConfig[]>([])
@@ -2323,6 +2508,11 @@ export default function SystemConfigPage() {
       label: <span>🩺 Physician Registry</span>,
       children: <PhysicianRegistryTab />,
     },
+    {
+      key: 'ai-audit',
+      label: <span>🤖 AI Audit</span>,
+      children: <AIAuditTab />,
+    },
   ]
 
   return (
@@ -2348,5 +2538,6 @@ export default function SystemConfigPage() {
     </div>
   )
 }
+
 
 
