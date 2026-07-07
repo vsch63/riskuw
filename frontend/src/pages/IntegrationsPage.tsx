@@ -50,7 +50,12 @@ function ProviderConfigTab() {
   const [loading, setLoading]     = useState(true)
   const [editModal, setEditModal] = useState<any>(null)
   const [countryF, setCountryF]   = useState('ALL')
+  const [tenantCtx, setTenantCtx] = useState<any>(null)
   const [form]                    = Form.useForm()
+
+  useEffect(() => {
+    intApi.get('/integrations/tenant-context').then(d => setTenantCtx(d)).catch(() => {})
+  }, [])
 
   const load = () => {
     setLoading(true)
@@ -61,6 +66,12 @@ function ProviderConfigTab() {
   }
 
   useEffect(() => { load() }, [countryF])
+
+  // Default-filter to tenant's operating countries unless user explicitly broadens
+  const operatingCodes: string[] = tenantCtx?.operating_countries || []
+  const visibleProviders = countryF === 'ALL' && operatingCodes.length
+    ? providers.filter(p => operatingCodes.includes(p.country_code))
+    : providers
 
   const toggleEnabled = async (provider: any, val: boolean) => {
     try {
@@ -84,7 +95,7 @@ function ProviderConfigTab() {
     } catch { message.error('Save failed') }
   }
 
-  const grouped = providers.reduce((acc: any, p: any) => {
+  const grouped = visibleProviders.reduce((acc: any, p: any) => {
     const key = `${p.country_code}__${p.integration_type}`
     ;(acc[key] = acc[key] || { country: p.country_code, type: p.integration_type, items: [] }).items.push(p)
     return acc
@@ -107,9 +118,17 @@ function ProviderConfigTab() {
 
   return (
     <div>
+      {countryF === 'ALL' && operatingCodes.length > 0 && (
+        <div style={{ background: 'rgba(0,212,170,0.05)', border: '1px solid rgba(0,212,170,0.15)',
+          borderRadius: 8, padding: '8px 14px', marginBottom: 14, fontSize: 12, color: '#9ca3af' }}>
+          Showing providers for your tenant's operating countries
+          ({operatingCodes.map((c: string) => COUNTRIES.find(x => x.code === c)?.flag).join(' ')}).
+          Use the filter below to browse other countries (e.g. before adding a new region).
+        </div>
+      )}
       <div style={{ display:'flex', gap:10, marginBottom:16 }}>
         <Select value={countryF} onChange={v => { setCountryF(v) }} style={{ width:200 }} size="small">
-          <Option value="ALL">🌍 All Countries</Option>
+          <Option value="ALL">🌍 Tenant's Countries</Option>
           {COUNTRIES.map(c => <Option key={c.code} value={c.code}>{c.flag} {c.name}</Option>)}
         </Select>
         <Button size="small" onClick={load}>🔄 Refresh</Button>
@@ -497,9 +516,16 @@ function VerificationHistoryTab() {
 function RunVerificationTab() {
   const [appRef, setAppRef]     = useState('')
   const [type, setType]         = useState('IDENTITY')
-  const [country, setCountry]   = useState('IN')
+  const [country, setCountry]   = useState('')          // resolved from tenant; '' = use tenant default
+  const [tenantCtx, setTenantCtx] = useState<any>(null)
   const [running, setRunning]   = useState(false)
   const [result, setResult]     = useState<any>(null)
+
+  useEffect(() => {
+    intApi.get('/integrations/tenant-context')
+      .then(d => { setTenantCtx(d); if (d?.default_country) setCountry(d.default_country) })
+      .catch(() => {})
+  }, [])
 
   const run = async () => {
     if (!appRef.trim()) { message.error('Enter an applicant ref'); return }
@@ -508,7 +534,7 @@ function RunVerificationTab() {
       const r = await intApi.post('/integrations/verify', {
         integration_type: type,
         applicant_ref:    appRef.trim(),
-        country_code:     country,
+        ...(tenantCtx?.is_multi_country ? { country_code: country } : {}),
       })
       setResult(r)
       if (r.status === 'COMPLETED') message.success('Verification completed')
@@ -518,7 +544,7 @@ function RunVerificationTab() {
   }
 
   const meta = TYPE_META[type] || { icon: '🔌', label: type, color: '#94a3b8' }
-  const countryMeta = COUNTRIES.find(c => c.code === country) || COUNTRIES[0]
+  const availableCountries = tenantCtx?.available_countries || []
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -529,9 +555,11 @@ function RunVerificationTab() {
       <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
         <Input value={appRef} onChange={e => setAppRef(e.target.value)}
           placeholder="Applicant Ref (e.g. APP-001)" style={{ flex: 1 }}/>
-        <Select value={country} onChange={setCountry} style={{ width: 170 }}>
-          {COUNTRIES.map(c => <Option key={c.code} value={c.code}>{c.flag} {c.name}</Option>)}
-        </Select>
+        {tenantCtx?.is_multi_country && (
+          <Select value={country} onChange={setCountry} style={{ width: 170 }}>
+            {availableCountries.map((c: any) => <Option key={c.code} value={c.code}>{c.flag} {c.country_name}</Option>)}
+          </Select>
+        )}
         <Select value={type} onChange={setType} style={{ width: 200 }}>
           {Object.entries(TYPE_META).map(([k,v]) => <Option key={k} value={k}>{v.icon} {v.label}</Option>)}
         </Select>
@@ -539,6 +567,12 @@ function RunVerificationTab() {
           Run Check
         </Button>
       </div>
+      {tenantCtx && !tenantCtx.is_multi_country && (
+        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12, marginTop: -8 }}>
+          Using {tenantCtx.currency?.flag || '🌍'} {tenantCtx.currency?.country_name || tenantCtx.default_country} (your tenant's configured country) ·{' '}
+          <a href="/system-config" style={{ color: '#00d4aa' }}>change in System Config</a>
+        </div>
+      )}
 
       {result && (
         <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)',

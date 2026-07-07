@@ -43,7 +43,7 @@ class VerifyRequest(BaseModel):
     provider_code: str | None = None  # if None, uses first enabled provider for type
     applicant_ref: str
     case_ref_id: int | None = None
-    country_code: str = "IN"        # IN | AE | SG | GB | US etc.
+    country_code: str | None = None  # if None, resolved from tenant's default_country
     # Applicant data for verification
     full_name: str | None = None
     age: int | None = None
@@ -107,6 +107,44 @@ def _persist_result(conn, req_id: int, result, provider_code: str, integration_t
 
 
 # ── List providers ────────────────────────────────────────────────────────────
+
+@router.get("/tenant-context")
+def get_tenant_context(current: CurrentUser):
+    """
+    Returns the current tenant's operating countries + default country + currency.
+    Used by the Integrations frontend to decide whether to show a country
+    selector at all, and what to default it to.
+    """
+    from services.country_currency import currency_for_country, list_countries
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT operating_countries, default_country FROM tenant WHERE id=%s::uuid",
+            (current.tenant_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        d = _row(row) if row else {}
+        operating = d.get("operating_countries") or ["IN"]
+        default   = d.get("default_country") or "IN"
+        return {
+            "operating_countries": operating,
+            "default_country":     default,
+            "currency":            currency_for_country(default),
+            "is_multi_country":    len(operating) > 1,
+            "available_countries": [c for c in list_countries() if c["code"] in operating],
+        }
+    except Exception:
+        from services.country_currency import currency_for_country
+        return {
+            "operating_countries": ["IN"], "default_country": "IN",
+            "currency": currency_for_country("IN"), "is_multi_country": False,
+            "available_countries": [],
+        }
+    finally:
+        release(conn)
+
 
 @router.get("/providers")
 def list_providers(current: CurrentUser, integration_type: str = "ALL", country_code: str = "ALL"):
@@ -189,14 +227,25 @@ def run_verification(body: VerifyRequest, current: CurrentUser):
     """
     Run an external data verification check.
     Auto-selects provider if provider_code not specified.
+    country_code resolves from the tenant's default_country if not given.
     """
     conn, release = _get_db()
     try:
         cur = conn.cursor()
 
+        # ── Resolve country_code from tenant config if not explicitly passed ──
+        country_code = body.country_code
+        if not country_code:
+            cur.execute(
+                "SELECT default_country FROM tenant WHERE id=%s::uuid",
+                (current.tenant_id,),
+            )
+            trow = cur.fetchone()
+            country_code = _row(trow).get("default_country", "IN") if trow else "IN"
+
         # Find provider — filter by country_code
         where = "tenant_id=%s AND integration_type=%s AND is_enabled=true AND country_code=%s"
-        params: list = [current.tenant_id, body.integration_type, body.country_code]
+        params: list = [current.tenant_id, body.integration_type, country_code]
         if body.provider_code:
             where += " AND provider_code=%s"
             params.append(body.provider_code)
@@ -249,7 +298,7 @@ def run_verification(body: VerifyRequest, current: CurrentUser):
             RETURNING id, request_ref
         """, (
             current.tenant_id, body.case_ref_id, body.applicant_ref,
-            body.integration_type, cfg["provider_code"], body.country_code,
+            body.integration_type, cfg["provider_code"], country_code,
             json.dumps(payload, default=str), current.username,
         ))
         req_row = _row(cur.fetchone())
@@ -292,6 +341,7 @@ def run_verification(body: VerifyRequest, current: CurrentUser):
             "request_ref":     req_ref,
             "provider_code":   cfg["provider_code"],
             "integration_type": body.integration_type,
+            "country_code":    country_code,
             "is_mock":         cfg["is_mock"],
             "status":          status,
             "result":          result.to_dict(),

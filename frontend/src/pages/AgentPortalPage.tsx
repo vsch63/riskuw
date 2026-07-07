@@ -295,7 +295,7 @@ function MyCasesTab() {
         <Button onClick={load} loading={loading}>🔄 Refresh</Button>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{total} total submissions</span>
       </div>
-      <Table dataSource={submissions} rowKey="applicant_ref" loading={loading} size="small"
+      <Table dataSource={submissions} rowKey="application_number" loading={loading} size="small"
         pagination={{ current: page, pageSize: 20, total, onChange: p => setPage(p), showSizeChanger: false }}
         columns={[
           { title: 'Reference', dataIndex: 'applicant_ref', width: 150, render: (v: string) => <code style={{ fontSize: 11, color: '#00d4aa' }}>{v}</code> },

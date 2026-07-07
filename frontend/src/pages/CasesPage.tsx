@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { Table, Tag, Input, Spin } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { uwAPI } from '../api/client'
+import { useCurrency } from '../context/CurrencyContext'
 import type { QueueCase } from '../types'
-
-const fmt = (n: number) => `₹${new Intl.NumberFormat('en-IN').format(n)}`
 
 const outcomeColor = (o?: string) => {
   if (!o) return 'default'
@@ -15,6 +14,7 @@ const outcomeColor = (o?: string) => {
 }
 
 export default function CasesPage() {
+  const { fmt } = useCurrency()
   const [cases, setCases] = useState<QueueCase[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')

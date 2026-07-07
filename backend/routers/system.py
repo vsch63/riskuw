@@ -1299,3 +1299,67 @@ def generate_letter(
 </html>"""
 
     return HTMLResponse(content=html, status_code=200)
+
+
+@router.get("/notification-config")
+def get_notification_config(current: CurrentUser):
+    from database import get_conn, release_conn
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT event, enabled, recipients, subject_tpl FROM notification_config ORDER BY event")
+        rows = cur.fetchall()
+        cur.close()
+        return [dict(r) if hasattr(r,"keys") else
+                {"event":r[0],"enabled":r[1],"recipients":r[2],"subject_tpl":r[3]}
+                for r in rows]
+    finally:
+        release_conn(conn)
+
+
+@router.post("/notification-config")
+def save_notification_config(body: dict, current: CurrentUser):
+    if current.role not in ("admin","super_admin"):
+        from fastapi import HTTPException
+        raise HTTPException(403, "Admins only")
+    from database import get_conn, release_conn
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO notification_config (event, enabled, updated_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (event) DO UPDATE
+            SET enabled=EXCLUDED.enabled, updated_at=now()
+        """, (body.get("event"), body.get("enabled", True)))
+        conn.commit()
+        cur.close()
+        return {"status": "saved", "event": body.get("event"), "enabled": body.get("enabled")}
+    finally:
+        release_conn(conn)
+
+
+@router.get("/notification-log")
+def get_notification_log(current: CurrentUser, limit: int = 20):
+    from database import get_conn, release_conn
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, event, recipient, subject, status, error_code, error_msg,
+                   applicant_ref, sent_at
+            FROM notification_log
+            ORDER BY sent_at DESC LIMIT %s
+        """, (limit,))
+        rows = [dict(r) if hasattr(r,"keys") else
+                {"id":r[0],"event":r[1],"recipient":r[2],"subject":r[3],
+                 "status":r[4],"error_code":r[5],"error_msg":r[6],
+                 "applicant_ref":r[7],"sent_at":str(r[8]) if r[8] else None}
+                for r in cur.fetchall()]
+        cur.close()
+        for r in rows:
+            if r.get("sent_at") and not isinstance(r["sent_at"], str):
+                r["sent_at"] = str(r["sent_at"])
+        return rows
+    finally:
+        release_conn(conn)

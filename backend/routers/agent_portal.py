@@ -26,6 +26,52 @@ def _get_db():
     return conn, release_conn
 
 
+def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "AGENT", uploaded_by: str = None):
+    """Upsert demographic/contact data into applicant_master. Never overwrites with blanks."""
+    if not applicant_ref:
+        return
+    full_name  = body.get("applicant_name") or body.get("full_name")
+    email      = body.get("applicant_email") or body.get("email")
+    phone      = body.get("applicant_phone") or body.get("phone") or body.get("mobile")
+    dob        = body.get("date_of_birth") or body.get("dob")
+    gender     = body.get("gender")
+    state      = body.get("state")
+    occupation = body.get("occupation_title") or body.get("occupation")
+    income     = body.get("annual_income")
+
+    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (applicant_ref,))
+    existing = cur.fetchone()
+
+    if existing:
+        sets = []
+        params = []
+        field_map = {
+            "full_name": full_name, "email": email, "phone": phone,
+            "mobile": phone, "dob": dob, "gender": gender, "state": state,
+            "occupation": occupation, "annual_income": income,
+        }
+        for col, val in field_map.items():
+            if val not in (None, ""):
+                sets.append(f"{col}=%s")
+                params.append(val)
+        if sets:
+            sets.append("updated_at=now()")
+            params.append(applicant_ref)
+            cur.execute(
+                f"UPDATE applicant_master SET {', '.join(sets)} WHERE applicant_ref=%s",
+                params
+            )
+    else:
+        cur.execute("""
+            INSERT INTO applicant_master
+                (applicant_ref, full_name, email, phone, mobile, dob, gender,
+                 state, occupation, annual_income, source, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (applicant_ref) DO NOTHING
+        """, (applicant_ref, full_name, email, phone, phone, dob, gender,
+              state, occupation, income, source, uploaded_by))
+
+
 @router.get("/dashboard")
 def agent_dashboard(current: CurrentUser):
     if current.role not in AGENT_ROLES:
@@ -167,6 +213,20 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
     case_number = _persist_decision(body_obj, result, current)
     if case_number:
         result["case_number"] = case_number
+
+    # Upsert applicant contact/demographic data
+    try:
+        conn4, release4 = _get_db()
+        try:
+            cur4 = conn4.cursor()
+            _upsert_applicant_master(cur4, body.applicant_ref, body.model_dump(), "AGENT", current.username)
+            conn4.commit()
+            cur4.close()
+        finally:
+            release4(conn4)
+    except Exception as e:
+        import logging
+        logging.getLogger("uw_platform").warning(f"applicant_master upsert failed: {e}")
 
     # Push REFERRED cases to the UW Workbench queue
     try:

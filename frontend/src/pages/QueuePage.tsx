@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Table, Tag, Button, Select, Input, Modal, Form,
-  Input, Spin, Badge, Tooltip, Divider, message,
+  Spin, Badge, Tooltip, Divider, message,
 } from 'antd'
 import {
   UserOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -9,12 +9,11 @@ import {
   FileTextOutlined, MedicineBoxOutlined,
 } from '@ant-design/icons'
 import { uwAPI } from '../api/client'
+import { useCurrency } from '../context/CurrencyContext'
 import type { QueueCase } from '../types'
 
 const { Option } = Select
 const { TextArea } = Input
-
-const fmt = (n: number) => `₹${new Intl.NumberFormat('en-IN').format(n)}`
 
 const outcomeColor = (o?: string) => {
   if (!o) return 'default'
@@ -36,6 +35,7 @@ const statusColor = (s?: string) => {
 interface Underwriter { username: string; full_name?: string; role: string }
 
 export default function QueuePage() {
+  const { fmt } = useCurrency()
   const [cases, setCases]           = useState<QueueCase[]>([])
   const [filtered, setFiltered]     = useState<QueueCase[]>([])
   const [loading, setLoading]       = useState(true)

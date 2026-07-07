@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from deps import CurrentUser
+from api_key_auth import FlexibleAuth
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,17 @@ class EvaluateRequest(BaseModel):
     diastolic_bp: int | None = None
     annual_income: float | None = None
     existing_coverage: float | None = None
+    # Premium mode
+    premium_mode:  str = "ANNUAL"   # ANNUAL | HALF_YEARLY | QUARTERLY | MONTHLY
+    # Contact / demographic fields (used for notifications + applicant_master upsert)
+    first_name:    str | None = None
+    middle_name:   str | None = None
+    last_name:     str | None = None
+    email:         str | None = None
+    mobile:        str | None = None
+    address_line1: str | None = None
+    city:          str | None = None
+    pincode:       str | None = None
 
 
 # ── UW Scale evaluation helper ────────────────────────────────────────────────
@@ -300,15 +312,13 @@ def _calc_bmi(applicant: dict) -> float | None:
 # ── Evaluate ──────────────────────────────────────────────────────────────────
 
 @router.post("/evaluate")
-def evaluate(body: EvaluateRequest, current: CurrentUser):
+def evaluate(body: EvaluateRequest, current: FlexibleAuth):
     """
     Run the underwriting rules engine and persist the decision.
     Delegates to services.uw_engine.run_evaluation() if available,
     otherwise uses the built-in fallback engine with UW scale integration.
     """
-    if current.role not in ("underwriter","senior_underwriter","admin","super_admin"):
-        raise HTTPException(403, "Underwriters only")
-    if current.role not in ("underwriter","senior_underwriter","admin","super_admin"):
+    if current.role not in ("underwriter","senior_underwriter","admin","super_admin","api_client"):
         raise HTTPException(403, "Underwriters only")
     try:
         from services.uw_engine import run_evaluation
@@ -547,6 +557,108 @@ def _persist_decision(body: "EvaluateRequest", result: dict, current) -> str | N
         release(conn)
 
 
+
+
+def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "ONLINE", uploaded_by: str = None):
+    """
+    Upsert demographic/contact data into applicant_master.
+    Safe to call with partial data - only updates fields that are present and non-empty.
+    Never overwrites existing data with blanks.
+    """
+    if not applicant_ref:
+        return
+    full_name  = body.get("applicant_name") or body.get("full_name")
+    email      = body.get("applicant_email") or body.get("email")
+    phone      = body.get("applicant_phone") or body.get("phone") or body.get("mobile")
+    dob        = body.get("date_of_birth") or body.get("dob")
+    gender     = body.get("gender")
+    state      = body.get("state")
+    occupation = body.get("occupation_title") or body.get("occupation")
+    income     = body.get("annual_income")
+
+    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (applicant_ref,))
+    existing = cur.fetchone()
+
+    if existing:
+        sets = []
+        params = []
+        field_map = {
+            "full_name": full_name, "email": email, "phone": phone,
+            "mobile": phone, "dob": dob, "gender": gender, "state": state,
+            "occupation": occupation, "annual_income": income,
+        }
+        for col, val in field_map.items():
+            if val not in (None, ""):
+                sets.append(f"{col}=%s")
+                params.append(val)
+        if sets:
+            sets.append("updated_at=now()")
+            params.append(applicant_ref)
+            cur.execute(
+                f"UPDATE applicant_master SET {chr(39).join([chr(44).join(sets)])} WHERE applicant_ref=%s".replace("'", ""),
+                params
+            )
+    else:
+        cur.execute("""
+            INSERT INTO applicant_master
+                (applicant_ref, full_name, email, phone, mobile, dob, gender,
+                 state, occupation, annual_income, source, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (applicant_ref) DO NOTHING
+        """, (applicant_ref, full_name, email, phone, phone, dob, gender,
+              state, occupation, income, source, uploaded_by))
+
+
+
+def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "ONLINE", uploaded_by: str = None):
+    """
+    Upsert demographic/contact data into applicant_master.
+    Safe to call with partial data - only updates fields that are present and non-empty.
+    Never overwrites existing data with blanks.
+    """
+    if not applicant_ref:
+        return
+    full_name  = body.get("applicant_name") or body.get("full_name")
+    email      = body.get("applicant_email") or body.get("email")
+    phone      = body.get("applicant_phone") or body.get("phone") or body.get("mobile")
+    dob        = body.get("date_of_birth") or body.get("dob")
+    gender     = body.get("gender")
+    state      = body.get("state")
+    occupation = body.get("occupation_title") or body.get("occupation")
+    income     = body.get("annual_income")
+
+    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (applicant_ref,))
+    existing = cur.fetchone()
+
+    if existing:
+        sets = []
+        params = []
+        field_map = {
+            "full_name": full_name, "email": email, "phone": phone,
+            "mobile": phone, "dob": dob, "gender": gender, "state": state,
+            "occupation": occupation, "annual_income": income,
+        }
+        for col, val in field_map.items():
+            if val not in (None, ""):
+                sets.append(f"{col}=%s")
+                params.append(val)
+        if sets:
+            sets.append("updated_at=now()")
+            params.append(applicant_ref)
+            cur.execute(
+                f"UPDATE applicant_master SET {chr(39).join([chr(44).join(sets)])} WHERE applicant_ref=%s".replace("'", ""),
+                params
+            )
+    else:
+        cur.execute("""
+            INSERT INTO applicant_master
+                (applicant_ref, full_name, email, phone, mobile, dob, gender,
+                 state, occupation, annual_income, source, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (applicant_ref) DO NOTHING
+        """, (applicant_ref, full_name, email, phone, phone, dob, gender,
+              state, occupation, income, source, uploaded_by))
+
 def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
     """
     Built-in rules evaluation with UW Scale integration.
@@ -720,7 +832,7 @@ def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
                         "net_debit_points": debits,
                         "risk_class":       risk_class,
                     },
-                    mode         = "ANNUAL",
+                    mode         = getattr(body, "premium_mode", "ANNUAL") or "ANNUAL",
                     formula_type = "BASE_PREMIUM",
                 )
                 if not prem.get("error") and prem.get("formula_found"):
@@ -787,8 +899,8 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
             INSERT INTO policy_admin_queue
                 (applicant_ref, product_code, face_amount, age, gender, state,
                  outcome, risk_class, net_debit_points, approved_premium,
-                 decision_date, source, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ONLINE', 'UNPROCESSED')
+                 premium_mode, decision_date, source, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ONLINE', 'UNPROCESSED')
             RETURNING id
             """,
             (
@@ -797,6 +909,7 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                 result.get("outcome"), result.get("risk_class"),
                 result.get("net_debit_points", 0),
                 result.get("approved_premium"),
+                getattr(body, "premium_mode", "ANNUAL") or "ANNUAL",
             ),
         )
         row      = cur.fetchone()
@@ -804,8 +917,95 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
         conn.commit()
         cur.close()
 
-        # ── Reinsurance trigger ───────────────────────────────────────────────
+
+        # ── Upsert applicant_master with contact details ─────────────────────
+        try:
+            full_name_parts = [p for p in [
+                getattr(body, "first_name", None),
+                getattr(body, "middle_name", None),
+                getattr(body, "last_name", None)
+            ] if p]
+            full_name = " ".join(full_name_parts) if full_name_parts else None
+            ucur = conn.cursor()
+            ucur.execute("""
+                INSERT INTO applicant_master (
+                    applicant_ref, full_name, email, mobile, phone,
+                    gender, address_line1, city, state, pincode,
+                    annual_income, source
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ONLINE')
+                ON CONFLICT (applicant_ref) DO UPDATE SET
+                    full_name    = COALESCE(EXCLUDED.full_name,    applicant_master.full_name),
+                    email        = COALESCE(EXCLUDED.email,        applicant_master.email),
+                    mobile       = COALESCE(EXCLUDED.mobile,       applicant_master.mobile),
+                    phone        = COALESCE(EXCLUDED.phone,        applicant_master.phone),
+                    gender       = COALESCE(EXCLUDED.gender,       applicant_master.gender),
+                    address_line1= COALESCE(EXCLUDED.address_line1,applicant_master.address_line1),
+                    city         = COALESCE(EXCLUDED.city,         applicant_master.city),
+                    state        = COALESCE(EXCLUDED.state,        applicant_master.state),
+                    pincode      = COALESCE(EXCLUDED.pincode,      applicant_master.pincode),
+                    annual_income= COALESCE(EXCLUDED.annual_income,applicant_master.annual_income),
+                    updated_at   = now()
+            """, (
+                body.applicant_ref,
+                full_name,
+                getattr(body,"email",None) or None,
+                getattr(body,"mobile",None) or None,
+                getattr(body,"mobile",None) or None,
+                body.gender or None,
+                getattr(body,"address_line1",None) or None,
+                getattr(body,"city",None) or None,
+                body.state or None,
+                getattr(body,"pincode",None) or None,
+                getattr(body,"annual_income",None) or None,
+            ))
+            conn.commit()
+            ucur.close()
+        except Exception as am_err:
+            logger.warning(f"applicant_master upsert failed for {body.applicant_ref}: {am_err}")
+            try: conn.rollback()
+            except: pass
+
+        # ── STP decision email notification ───────────────────────────────────
         outcome = result.get("outcome", "")
+        # Resolve outcome here so email block and RI trigger both use it
+        outcome = result.get("outcome", "")
+
+        if "APPROVED" in outcome and "STP" in outcome:
+            try:
+                from services.notification import send_decision_email
+                from database import get_conn, release_conn
+                nconn = get_conn()
+                try:
+                    ncur = nconn.cursor()
+                    ncur.execute(
+                        "SELECT full_name, email FROM applicant_master WHERE applicant_ref=%s LIMIT 1",
+                        (body.applicant_ref,)
+                    )
+                    arow = ncur.fetchone()
+                    ncur.close()
+                    if arow:
+                        adict = dict(arow) if hasattr(arow,"keys") else {"full_name":arow[0],"email":arow[1]}
+                        if adict.get("email"):
+                            send_decision_email(
+                                nconn,
+                                to_email=adict["email"],
+                                applicant_name=adict.get("full_name",""),
+                                outcome=outcome,
+                                applicant_ref=body.applicant_ref,
+                                product_name=body.product_code,
+                                premium=result.get("approved_premium"),
+                                risk_class=result.get("risk_class"),
+                                premium_detail=result.get("premium_detail"),
+                            )
+                    else:
+                        from services.notification import log_missing_email_warning
+                        log_missing_email_warning(nconn, body.applicant_ref, outcome)
+                finally:
+                    release_conn(nconn)
+            except Exception as notif_err:
+                logger.warning(f"STP decision email failed for {body.applicant_ref}: {notif_err}")
+
+        # ── Reinsurance trigger ───────────────────────────────────────────────
         if "APPROVED" in outcome:
             try:
                 from services.ri_trigger import check_and_trigger_reinsurance

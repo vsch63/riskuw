@@ -31,7 +31,8 @@ const NAV_CONFIG = [
   { key: '/rule-config',    icon: <FunctionOutlined />,    label: 'Rules' },
   { key: '/system-config',  icon: <SettingOutlined />,     label: 'System' },
   { key: '/output-interface', icon: <ExportOutlined/>, label: 'Output Interface' },
-  { key: '/audit'           , icon: <AuditOutlined/>,      label: 'Audit Log' }
+  { key: '/audit'           , icon: <AuditOutlined/>,      label: 'Audit Log' },
+  { key: '/developer-portal', icon: <ApiOutlined/>,        label: 'Developer Portal' },
 ]
 
 const ROLE_COLOR: Record<string,string> = {

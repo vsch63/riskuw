@@ -1,4 +1,3 @@
-version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RiskUW Platform — docker-compose.yml
@@ -94,14 +93,20 @@ services:
 
   # ── Worker (same image as fastapi — different command) ───────────────────────
   worker:
-    image: vsch63/riskuw-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: riskuw-backend-local
     container_name: riskuw_worker
+    command: python3 -m services.job_queue
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${DB_USER:-uw_user}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-uw_platform}
       REDIS_URL:    redis://redis:6379/0
-    command: ["python3", "-m", "app.services.job_queue"]
     depends_on:
       postgres:
         condition: service_healthy

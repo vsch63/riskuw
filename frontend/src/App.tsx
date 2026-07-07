@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './context/authStore'
+import { CurrencyProvider } from './context/CurrencyContext'
 import LoginPage from './pages/LoginPage'
 import AppLayout from './components/AppLayout'
 import EvaluatePage from './pages/EvaluatePage'
@@ -20,7 +21,9 @@ import DebitScalePage from './pages/DebitScalePage'
 import MyAccountPage from './pages/MyAccountPage'
 import WorkbenchPage from './pages/WorkbenchPage'
 import AgentPortalPage from './pages/AgentPortalPage'
+import PolicyAdminPage from './pages/PolicyAdminPage'
 import IntegrationsPage from './pages/IntegrationsPage'
+import DeveloperPortalPage from './pages/DeveloperPortalPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user)
@@ -37,6 +40,7 @@ function RequireUW({ children }: { children: React.ReactNode }) {
 export default function App() {
   const user = useAuthStore((s) => s.user)
   return (
+    <CurrencyProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
@@ -57,7 +61,9 @@ export default function App() {
           <Route path="output-interface" element={<OutputInterfacePage />} />
           <Route path="audit"   element={<AuditLogPage />} />
           <Route path="members" element={<MembersPage />} />
+          <Route path="policy-admin" element={<PolicyAdminPage />} />
           <Route path="/integrations" element={<IntegrationsPage />} />
+          <Route path="/developer-portal" element={<DeveloperPortalPage />} />
           <Route path="/my-account" element={<MyAccountPage />} />
         </Route>
         <Route path="/agent-portal" element={
@@ -68,5 +74,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </CurrencyProvider>
   )
 }
+

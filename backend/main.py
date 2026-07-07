@@ -134,6 +134,7 @@ from routers.ocr_extract      import router as ocr_router                   # �
 from routers.analytics        import router as analytics_router             # ← ANALYTICS
 from routers.icd10            import router as icd10_router                 # ← ICD10
 from routers.agent_portal     import router as agent_router                 # ← AGENT
+from routers.policy_admin     import router as policy_router                # ← POLICY
 
 app.include_router(auth_router)
 app.include_router(products_router)
@@ -165,6 +166,7 @@ app.include_router(ocr_router)
 app.include_router(analytics_router)
 app.include_router(icd10_router)
 app.include_router(agent_router)
+app.include_router(policy_router)
 
 try:
     from routers.workbench import router as workbench_router
@@ -177,6 +179,12 @@ try:
     app.include_router(integrations_router)
 except ImportError:
     logger.warning("routers/integrations.py not found — Integration endpoints disabled")
+
+try:
+    from routers.api_keys import router as api_keys_router
+    app.include_router(api_keys_router)
+except ImportError:
+    logger.warning("routers/api_keys.py not found — API key management disabled")
 
 # ── Global exception handler ──────────────────────────────────────────────────
 from fastapi import Request

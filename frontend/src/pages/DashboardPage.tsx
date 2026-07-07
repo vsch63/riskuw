@@ -5,6 +5,7 @@ import {
   CloseCircleOutlined, SwapOutlined,
 } from '@ant-design/icons'
 import { uwAPI } from '../api/client'
+import { useCurrency } from '../context/CurrencyContext'
 import type { QueueCase } from '../types'
 import { useNavigate } from 'react-router-dom'
 
@@ -53,6 +54,7 @@ function MetricCard({ label, value, icon, color }: {
 }
 
 export default function DashboardPage() {
+  const { fmt } = useCurrency()
   const [cases, setCases] = useState<QueueCase[]>([])
   const [metrics, setMetrics] = useState<Metrics>({ total: 0, approved: 0, declined: 0, referred: 0, stp_rate: 0 })
   const [loading, setLoading] = useState(true)
@@ -186,7 +188,7 @@ export default function DashboardPage() {
                         {c.applicant_ref ?? c.id}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--slate-500)' }}>
-                        {c.product_code} · ₹{c.face_amount ? new Intl.NumberFormat('en-IN').format(c.face_amount) : '—'}
+                        {c.product_code} · {c.face_amount ? fmt(c.face_amount) : '—'}
                       </div>
                     </div>
                     <span style={{
@@ -224,4 +226,3 @@ export default function DashboardPage() {
     </div>
   )
 }
-

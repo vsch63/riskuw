@@ -13,6 +13,7 @@ import {
   CaretRightOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAuthStore } from '../context/authStore'
 import PhysicianRegistryTab from './PhysicianRegistryTab'
 import { GSTModalConfigTab } from './GSTModalConfigTab'
 
@@ -164,6 +165,52 @@ function GeneralTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: str
         </Form>
       </div>
 
+      <div style={card}>
+        <div style={secTitle}>Policy Number Settings</div>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:16 }}>
+            <Form.Item name="policy_number_prefix" label="Prefix" help="e.g. RUW">
+              <Input placeholder="RUW" maxLength={10}/>
+            </Form.Item>
+            <Form.Item name="policy_number_digits" label="Sequence Digits" help="Zero-padded width">
+              <Select>
+                {[4,5,6,7,8,9,10].map(d => <Option key={d} value={String(d)}>{d} digits</Option>)}
+              </Select>
+            </Form.Item>
+            <Form.Item name="policy_number_suffix" label="Suffix (optional)" help="e.g. -IN or product code">
+              <Input placeholder="" maxLength={10}/>
+            </Form.Item>
+            <Form.Item name="policy_grace_period_days" label="Grace Period (days)"
+              help="Before policy lapses">
+              <InputNumber min={0} max={180} style={{ width:'100%' }} placeholder="30"/>
+            </Form.Item>
+          </div>
+          <Form.Item shouldUpdate noStyle>
+            {() => {
+              const v = form.getFieldsValue()
+              const prefix = v.policy_number_prefix || 'RUW'
+              const digits = parseInt(v.policy_number_digits || '6')
+              const suffix = v.policy_number_suffix || ''
+              const year = new Date().getFullYear().toString().slice(-2)
+              const example = `${prefix}-${year}-${'1'.padStart(digits,'0')}${suffix}`
+              return (
+                <div style={{
+                  background:'rgba(0,212,170,0.06)', border:'1px solid rgba(0,212,170,0.2)',
+                  borderRadius:8, padding:'10px 14px', marginTop:4, marginBottom:8,
+                }}>
+                  <span style={{ fontSize:11, color:'#6b7280', marginRight:8 }}>PREVIEW:</span>
+                  <code style={{ fontSize:14, color:'#00d4aa', fontWeight:700 }}>{example}</code>
+                </div>
+              )
+            }}
+          </Form.Item>
+          <div style={{ fontSize:11, color:'#6b7280' }}>
+            Policy numbers are sequential across all products. The sequence is atomic and
+            collision-free regardless of which product the policy belongs to.
+          </div>
+        </Form>
+      </div>
+
       {/* UW Thresholds info — moved to product level */}
       <div style={{ ...card, borderColor:'rgba(251,191,36,0.2)', background:'rgba(251,191,36,0.04)' }}>
         <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
@@ -191,6 +238,128 @@ function GeneralTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: str
 // ══════════════════════════════════════════════════════════════════════════════
 // TAB 2 — Currency
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// Operating Countries Tab — drives currency + integrations defaults
+// ══════════════════════════════════════════════════════════════════════════════
+const COUNTRY_OPTIONS = [
+  { code: 'IN', flag: '🇮🇳', name: 'India',           currency: 'INR (₹)' },
+  { code: 'AE', flag: '🇦🇪', name: 'United Arab Emirates', currency: 'AED (د.إ)' },
+  { code: 'SG', flag: '🇸🇬', name: 'Singapore',       currency: 'SGD (S$)' },
+  { code: 'GB', flag: '🇬🇧', name: 'United Kingdom',  currency: 'GBP (£)' },
+  { code: 'US', flag: '🇺🇸', name: 'United States',   currency: 'USD ($)' },
+]
+
+function OperatingCountriesTab({ tenantId, onCountryChanged }: { tenantId: string; onCountryChanged: () => void }) {
+  const [operating, setOperating] = useState<string[]>(['IN'])
+  const [defaultC, setDefaultC]   = useState('IN')
+  const [loading, setLoading]     = useState(true)
+  const [saving, setSaving]       = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const d = await sysApi.get(`/tenants/${tenantId}/country-config`)
+      setOperating(d?.operating_countries || ['IN'])
+      setDefaultC(d?.default_country || 'IN')
+    } catch { message.error('Failed to load country config') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { if (tenantId) load() }, [tenantId])
+
+  const save = async () => {
+    if (operating.length === 0) { message.error('Select at least one operating country'); return }
+    if (!operating.includes(defaultC)) { message.error('Default country must be one of the selected operating countries'); return }
+    setSaving(true)
+    try {
+      await sysApi.patch(`/tenants/${tenantId}`, { operating_countries: operating, default_country: defaultC })
+      message.success('Operating countries saved — currency auto-updated')
+      onCountryChanged()
+      load()
+    } catch { message.error('Save failed') }
+    finally { setSaving(false) }
+  }
+
+  if (loading) return <Spin/>
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
+        Select the countries this tenant operates in. The default country drives currency
+        and is used automatically for external verification checks (CKYC, CIBIL, etc.).
+        Select multiple countries if this tenant manages insurers across regions.
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Operating Countries</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
+          {COUNTRY_OPTIONS.map(c => (
+            <label key={c.code} style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+              borderRadius: 8, cursor: 'pointer',
+              background: operating.includes(c.code) ? 'rgba(0,212,170,0.08)' : 'rgba(255,255,255,0.02)',
+              border: `1px solid ${operating.includes(c.code) ? 'rgba(0,212,170,0.3)' : 'rgba(255,255,255,0.07)'}`,
+            }}>
+              <input
+                type="checkbox"
+                checked={operating.includes(c.code)}
+                onChange={e => {
+                  if (e.target.checked) setOperating(prev => [...prev, c.code])
+                  else {
+                    const next = operating.filter(x => x !== c.code)
+                    setOperating(next)
+                    if (defaultC === c.code && next.length) setDefaultC(next[0])
+                  }
+                }}
+              />
+              <span style={{ fontSize: 18 }}>{c.flag}</span>
+              <div>
+                <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>{c.currency}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        {operating.length > 1 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>
+              Default Country (used unless a verification call specifies otherwise)
+            </div>
+            <Select value={defaultC} onChange={setDefaultC} style={{ width: '100%' }}>
+              {COUNTRY_OPTIONS.filter(c => operating.includes(c.code)).map(c => (
+                <Option key={c.code} value={c.code}>{c.flag} {c.name}</Option>
+              ))}
+            </Select>
+          </div>
+        )}
+
+        {operating.length === 1 && (
+          <div style={{ background: 'rgba(0,212,170,0.05)', border: '1px solid rgba(0,212,170,0.15)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#9ca3af' }}>
+            Single-country tenant — all verification checks and currency will default to{' '}
+            <strong style={{ color: '#00d4aa' }}>
+              {COUNTRY_OPTIONS.find(c => c.code === operating[0])?.flag} {COUNTRY_OPTIONS.find(c => c.code === operating[0])?.name}
+            </strong>{' '}automatically, with no country selector shown to users.
+          </div>
+        )}
+
+        {operating.length > 1 && (
+          <div style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.15)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#9ca3af' }}>
+            Multi-country tenant — underwriters will see a country selector when running
+            verification checks, scoped to your {operating.length} selected countries.
+          </div>
+        )}
+
+        <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={save}>
+          Save Operating Countries
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
 function CurrencyTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
   const [form] = Form.useForm()
   const [selCode, setSelCode] = useState('INR')
@@ -225,6 +394,8 @@ function CurrencyTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: st
     <div style={{ maxWidth: 560 }}>
       <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>
         Set the currency for all premium and face amount displays.
+        Currency is auto-set from your Operating Countries selection above —
+        change it here only if this tenant needs an override (e.g. a UAE entity invoicing in USD).
       </div>
       <div style={card}>
         <div style={secTitle}>Currency Settings</div>
@@ -795,7 +966,7 @@ function SMTPTab() {
   useEffect(() => {
     sysApi.get('/system/smtp').then(r => {
       form.setFieldsValue(r)
-      if (r?.host) setStatus(r)
+      if (r?.smtp_host) setStatus(r)
     }).catch(() => {})
   }, [])
 
@@ -805,7 +976,7 @@ function SMTPTab() {
       await sysApi.post('/system/smtp', form.getFieldsValue())
       message.success('SMTP settings saved')
       const r = await sysApi.get('/system/smtp')
-      if (r?.host) setStatus(r)
+      if (r?.smtp_host) setStatus(r)
     }
     catch { message.error('Failed to save SMTP') }
     finally { setSaving(false) }
@@ -837,10 +1008,10 @@ function SMTPTab() {
       </div>
 
       {/* Status banner */}
-      {smtpStatus?.host ? (
+      {smtpStatus?.smtp_host ? (
         <div style={{ background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.25)', borderRadius:8,
           padding:'8px 14px', marginBottom:16, fontSize:13, color:'#4ade80' }}>
-          ✅ SMTP configured: <strong>{smtpStatus.host}</strong> port {smtpStatus.port} from <strong>{smtpStatus.from_email}</strong>
+          ✅ SMTP configured: <strong>{smtpStatus.smtp_host}</strong> port {smtpStatus.smtp_port} from <strong>{smtpStatus.smtp_from}</strong>
         </div>
       ) : (
         <div style={{ background:'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.2)', borderRadius:8,
@@ -1261,45 +1432,127 @@ function StateCodesTab() {
 // TAB 9 — Notifications
 // ══════════════════════════════════════════════════════════════════════════════
 function NotificationsTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
-  const EVENTS: Record<string, string> = {
-    decision_approved:  'Decision Approved',
-    decision_declined:  'Decision Declined',
-    decision_referred:  'Decision Referred',
-    aps_requested:      'APS Requested',
-    batch_complete:     'Batch Job Complete',
-    user_created:       'New User Created',
-    mfa_enabled:        'MFA Enabled',
-    ri_cession_submitted: 'RI Cession Submitted',
+  const [notifConfig, setNotifConfig] = useState<Record<string,boolean>>({})
+  const [saving, setSaving] = useState<string|null>(null)
+  const token = localStorage.getItem('riskuw_token') || ''
+
+  const EVENTS = [
+    { key: 'AUTO_EMAIL_ENABLED',   label: '🌐 Global Auto-Email Switch',       hint: 'Master switch — turn off to disable ALL automated emails', color: '#ef4444' },
+    { key: 'STP_APPROVAL_EMAIL',   label: '✅ STP Approval Decision Email',     hint: 'Email applicant when application is approved straight-through', color: '#22c55e' },
+    { key: 'REFERRED_EMAIL',       label: '⏳ Referred Case Email',            hint: 'Email applicant when case is referred for manual review', color: '#fbbf24' },
+    { key: 'DECLINED_EMAIL',       label: '❌ Declined Decision Email',         hint: 'Email applicant when application is declined', color: '#ef4444' },
+    { key: 'RI_CESSION_EMAIL',     label: '🔄 Reinsurance Cession Email',      hint: 'Email reinsurer automatically when a cession is created', color: '#60a5fa' },
+    { key: 'APS_REQUEST_EMAIL',    label: '🩺 APS Request Email',             hint: 'Email physician when APS/medical requirement added in Workbench', color: '#c084fc' },
+    { key: 'BATCH_COMPLETE_EMAIL', label: '📦 Batch Complete Email',           hint: 'Email admin when a batch job completes', color: '#94a3b8' },
+  ]
+
+  useEffect(() => {
+    fetch('/system/notification-config', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(d => {
+        if (Array.isArray(d)) {
+          const m: Record<string,boolean> = {}
+          d.forEach((r: any) => { m[r.event] = r.enabled })
+          setNotifConfig(m)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const toggle = async (event: string, val: boolean) => {
+    setSaving(event)
+    try {
+      await fetch('/system/notification-config', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, enabled: val }),
+      })
+      setNotifConfig(prev => ({ ...prev, [event]: val }))
+      message.success(`${val ? 'Enabled' : 'Disabled'}: ${event.replace(/_/g,' ')}`)
+    } catch { message.error('Failed to update') }
+    finally { setSaving(null) }
   }
+
+  const globalOn = notifConfig['AUTO_EMAIL_ENABLED'] !== false
 
   return (
     <div style={{ maxWidth: 680 }}>
       <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>
-        Configure which platform events trigger email notifications and who receives them.
-        SMTP must be configured in the <strong style={{ color:'#e2e8f0' }}>SMTP / Email</strong> tab for notifications to send.
+        Control which events trigger automatic emails. SMTP must be configured in the
+        <strong style={{ color:'#e2e8f0' }}> SMTP / Email</strong> tab for emails to send.
       </div>
 
       <div style={card}>
-        <div style={secTitle}>Reinsurance Email Settings</div>
-        <ConfigRow cfgKey="ri_auto_email_enabled" label="Auto-email reinsurer on cession"
-          hint="true/false — automatically email RI slip on cession submission" configs={configs} onSave={onSave} mono/>
+        <div style={secTitle}>Email Settings</div>
+        <ConfigRow cfgKey="email_from" label="Default From Address"
+          hint="Sender address shown on all automated emails" configs={configs} onSave={onSave}/>
       </div>
 
       <div style={card}>
-        <div style={secTitle}>Email From Address</div>
-        <ConfigRow cfgKey="email_from" label="Email From Address" hint="Default sender for all notification emails" configs={configs} onSave={onSave}/>
-      </div>
-
-      <div style={card}>
-        <div style={secTitle}>Event Notification Recipients</div>
-        <div style={{ fontSize:12, color:'#6b7280', marginBottom:12 }}>
-          Configure email recipients for each platform event. Comma-separate multiple addresses.
-        </div>
-        {Object.entries(EVENTS).map(([key, label]) => (
-          <ConfigRow key={key} cfgKey={`notif_recipient_${key}`} label={label}
-            hint={`Recipients for ${label.toLowerCase()} notifications`} configs={configs} onSave={onSave}/>
+        <div style={secTitle}>Automated Email Events</div>
+        {!globalOn && (
+          <div style={{ background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.2)',
+            borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:12, color:'#f87171' }}>
+            ⚠ Global auto-email switch is OFF — no automated emails will be sent.
+          </div>
+        )}
+        {EVENTS.map(ev => (
+          <div key={ev.key} style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+            padding:'12px 0', borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:600,
+                color: ev.key==='AUTO_EMAIL_ENABLED' ? ev.color : (globalOn ? '#e2e8f0' : '#6b7280') }}>
+                {ev.label}
+              </div>
+              <div style={{ fontSize:11, color:'#6b7280', marginTop:2 }}>{ev.hint}</div>
+            </div>
+            <Switch
+              checked={notifConfig[ev.key] !== false}
+              onChange={val => toggle(ev.key, val)}
+              loading={saving === ev.key}
+              disabled={ev.key !== 'AUTO_EMAIL_ENABLED' && !globalOn}
+              checkedChildren="ON" unCheckedChildren="OFF"
+            />
+          </div>
         ))}
       </div>
+
+      <div style={card}>
+        <div style={secTitle}>Recent Notification Log</div>
+        <NotificationLogWidget token={token} />
+      </div>
+    </div>
+  )
+}
+
+function NotificationLogWidget({ token }: { token: string }) {
+  const [logs, setLogs] = useState<any[]>([])
+  useEffect(() => {
+    fetch('/system/notification-log?limit=10', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(d => setLogs(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [])
+
+  if (!logs.length) return <div style={{ fontSize:12, color:'#4b5563' }}>No notifications logged yet.</div>
+
+  return (
+    <div>
+      {logs.map((l:any,i:number) => (
+        <div key={l.id ?? i} style={{ display:'flex', gap:10, padding:'8px 0',
+          borderBottom:'1px solid rgba(255,255,255,0.04)', fontSize:11 }}>
+          <Tag color={l.status==='SENT'?'success':l.status==='SKIPPED'?'warning':'error'}
+            style={{ fontSize:9, minWidth:52, textAlign:'center' }}>
+            {l.status}
+          </Tag>
+          <div style={{ flex:1 }}>
+            <span style={{ color:'#9ca3af' }}>{l.event}</span>
+            {l.error_code && <Tag style={{ marginLeft:6, fontSize:9 }}>{l.error_code}</Tag>}
+            <div style={{ color:'#6b7280' }}>{l.recipient} · {l.sent_at?.slice(0,16).replace('T',' ')}</div>
+            {l.error_msg && <div style={{ color:'#f87171', marginTop:2 }}>{l.error_msg?.slice(0,120)}</div>}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -2376,6 +2629,8 @@ function AIAuditTab() {
 
 // ══════════════════════════════════════════════════════════════════════════════
 export default function SystemConfigPage() {
+  const { user } = useAuthStore()
+  const tenantId = user?.tenant_id || ''
   const [configs, setConfigs] = useState<SysConfig[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -2401,117 +2656,156 @@ export default function SystemConfigPage() {
     } catch { message.error(`Failed to update ${key}`) }
   }
 
-  // ── Rate Scales inner tabs ───────────────────────────────────────────────
-  const rateScalesTabs = [
+  // ── Grouped main tabs (5 groups, sub-tabs inside each) ──────────────────
+  const mainTabs = [
     {
-      key: 'rate-tables',
-      label: <span>📊 Rate Tables</span>,
-      children: <RateTablesTab/>,
-    },
-    {
-      key: 'upload-rates',
-      label: <span><UploadOutlined/> Upload Rates</span>,
-      children: <UploadRatesTab/>,
-    },
-    {
-      key: 'uw-scales',
-      label: <span>⚖️ UW Scales</span>,
-      children: <UWScalesTab/>,
-    },
-  ]
-
-  // ── Reference Data inner tabs ────────────────────────────────────────────
-  const referenceDataTabs = [
-    {
-      key: 'error-codes',
-      label: <span>⚠️ Error Codes</span>,
-      children: <ErrorCodesTab />,
-    },
-    {
-      key: 'state-codes',
-      label: <span><EnvironmentOutlined/> State Codes</span>,
-      children: <StateCodesTab/>,
-    },
-  ]
-
-  const tabs = [
-    {
-      key: 'general',
-      label: <span><SettingOutlined/> General</span>,
-      children: <GeneralTab configs={configs} onSave={saveConfig}/>,
-    },
-    {
-      key: 'currency',
-      label: <span><DollarOutlined/> Currency</span>,
-      children: <CurrencyTab configs={configs} onSave={saveConfig}/>,
-    },
-    {
-      key: 'rate-scales',
-      label: <span>📊 Rate Scales</span>,
-      children: (
-        <Tabs
-          defaultActiveKey="rate-tables"
-          items={rateScalesTabs}
-          size="small"
-          tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:20 }}
-        />
-      ),
-    },
-    {
-      key: 'letter-templates',
-      label: <span><FileTextOutlined/> Templates</span>,
-      children: <LetterTemplatesTab/>,
-    },
-    {
-      key: 'smtp',
-    label: <span><MailOutlined/> SMTP / Email</span>,
-      children: <SMTPTab/>,
-    },
-    {
-      key: 'apikeys',
-      label: <span><KeyOutlined/> API Keys</span>,
-      children: <APIKeysTab configs={configs} onSave={saveConfig}/>,
-    },
-    {
-      key: 'reference-data',
-      label: <span>📋 Reference Data</span>,
+      key: 'platform',
+      label: <span><SettingOutlined/> Platform</span>,
       children: (
         <Tabs
           defaultActiveKey="general"
-          items={referenceDataTabs}
           size="small"
-          tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:20 }}
+          tabBarStyle={{ background:'rgba(255,255,255,0.03)', borderRadius:8, padding:'4px 8px', marginBottom:20, border:'1px solid rgba(255,255,255,0.07)' }}
+          items={[
+            {
+              key: 'general',
+              label: <span><SettingOutlined/> General</span>,
+              children: <GeneralTab configs={configs} onSave={saveConfig}/>,
+            },
+            {
+              key: 'countries',
+              label: <span>🌍 Operating Countries</span>,
+              children: <OperatingCountriesTab tenantId={tenantId} onCountryChanged={load}/>,
+            },
+            {
+              key: 'currency',
+              label: <span><DollarOutlined/> Currency</span>,
+              children: <CurrencyTab configs={configs} onSave={saveConfig}/>,
+            },
+          ]}
         />
       ),
     },
     {
-      key: 'notifications',
-      label: <span><BellOutlined/> Notifications</span>,
-      children: <NotificationsTab configs={configs} onSave={saveConfig}/>,
-    },
-    {
-      key: 'user-labels',
-      label: <span>🏷️ User Labels</span>,
-      children: <UserLabelsTab/>,
-    },
-    {
-      key: 'gst-modal',
-      label: <span>💰 GST & Modal Factors</span>,
+      key: 'underwriting',
+      label: <span>📊 Underwriting</span>,
       children: (
-        <div style={{ padding: '8px 0' }}>
-          <GSTModalConfigTab />
-        </div>
+        <Tabs
+          defaultActiveKey="rate-tables"
+          size="small"
+          tabBarStyle={{ background:'rgba(255,255,255,0.03)', borderRadius:8, padding:'4px 8px', marginBottom:20, border:'1px solid rgba(255,255,255,0.07)' }}
+          items={[
+            {
+              key: 'rate-tables',
+              label: <span>📊 Rate Tables</span>,
+              children: <RateTablesTab/>,
+            },
+            {
+              key: 'upload-rates',
+              label: <span><UploadOutlined/> Upload Rates</span>,
+              children: <UploadRatesTab/>,
+            },
+            {
+              key: 'uw-scales',
+              label: <span>⚖️ UW Scales</span>,
+              children: <UWScalesTab/>,
+            },
+            {
+              key: 'gst-modal',
+              label: <span>💰 GST & Modal Factors</span>,
+              children: (
+                <div style={{ padding: '8px 0' }}>
+                  <GSTModalConfigTab />
+                </div>
+              ),
+            },
+            {
+              key: 'physicians',
+              label: <span>🩺 Physician Registry</span>,
+              children: <PhysicianRegistryTab />,
+            },
+          ]}
+        />
       ),
     },
     {
-      key: 'physicians',
-      label: <span>🩺 Physician Registry</span>,
-      children: <PhysicianRegistryTab />,
+      key: 'communications',
+      label: <span><MailOutlined/> Communications</span>,
+      children: (
+        <Tabs
+          defaultActiveKey="smtp"
+          size="small"
+          tabBarStyle={{ background:'rgba(255,255,255,0.03)', borderRadius:8, padding:'4px 8px', marginBottom:20, border:'1px solid rgba(255,255,255,0.07)' }}
+          items={[
+            {
+              key: 'smtp',
+              label: <span><MailOutlined/> SMTP / Email</span>,
+              children: <SMTPTab/>,
+            },
+            {
+              key: 'letter-templates',
+              label: <span><FileTextOutlined/> Templates</span>,
+              children: <LetterTemplatesTab/>,
+            },
+            {
+              key: 'notifications',
+              label: <span><BellOutlined/> Notifications</span>,
+              children: <NotificationsTab configs={configs} onSave={saveConfig}/>,
+            },
+          ]}
+        />
+      ),
     },
     {
-      key: 'ai-audit',
-      label: <span>🤖 AI Audit</span>,
-      children: <AIAuditTab />,
+      key: 'integrations',
+      label: <span><KeyOutlined/> Integrations</span>,
+      children: (
+        <Tabs
+          defaultActiveKey="apikeys"
+          size="small"
+          tabBarStyle={{ background:'rgba(255,255,255,0.03)', borderRadius:8, padding:'4px 8px', marginBottom:20, border:'1px solid rgba(255,255,255,0.07)' }}
+          items={[
+            {
+              key: 'apikeys',
+              label: <span><KeyOutlined/> API Keys</span>,
+              children: <APIKeysTab configs={configs} onSave={saveConfig}/>,
+            },
+            {
+              key: 'error-codes',
+              label: <span>⚠️ Error Codes</span>,
+              children: <ErrorCodesTab />,
+            },
+            {
+              key: 'state-codes',
+              label: <span><EnvironmentOutlined/> State Codes</span>,
+              children: <StateCodesTab/>,
+            },
+            {
+              key: 'user-labels',
+              label: <span>🏷️ User Labels</span>,
+              children: <UserLabelsTab/>,
+            },
+          ]}
+        />
+      ),
+    },
+    {
+      key: 'audit',
+      label: <span>🤖 Audit & AI</span>,
+      children: (
+        <Tabs
+          defaultActiveKey="ai-audit"
+          size="small"
+          tabBarStyle={{ background:'rgba(255,255,255,0.03)', borderRadius:8, padding:'4px 8px', marginBottom:20, border:'1px solid rgba(255,255,255,0.07)' }}
+          items={[
+            {
+              key: 'ai-audit',
+              label: <span>🤖 AI Audit</span>,
+              children: <AIAuditTab />,
+            },
+          ]}
+        />
+      ),
     },
   ]
 
@@ -2532,12 +2826,14 @@ export default function SystemConfigPage() {
 
       {loading
         ? <div style={{ display:'flex', justifyContent:'center', paddingTop:60 }}><Spin size="large"/></div>
-        : <Tabs defaultActiveKey="general" items={tabs}
-            tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:24 }}/>
+        : <Tabs
+            defaultActiveKey="platform"
+            items={mainTabs}
+            tabBarStyle={{ borderBottom:'1px solid rgba(255,255,255,0.07)', marginBottom:24 }}
+          />
       }
     </div>
   )
 }
-
 
 

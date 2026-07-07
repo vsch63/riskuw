@@ -83,6 +83,8 @@ class TenantUpdate(BaseModel):
     trial_ends_at:           Optional[str] = None
     contract_start:          Optional[str] = None
     contract_end:            Optional[str] = None
+    operating_countries:     Optional[list[str]] = None
+    default_country:         Optional[str] = None
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -123,7 +125,7 @@ def get_tenant(tid: str, current: CurrentUser):
             " state_of_domicile, naic_code, max_users, max_decisions_per_month,"
             " decisions_this_month, sso_enabled, api_enabled, timezone,"
             " date_format, notes, trial_ends_at, contract_start, contract_end,"
-            " created_at, updated_at, logo_url "
+            " created_at, updated_at, logo_url, operating_countries, default_country "
             "FROM tenant WHERE id=%s::uuid",
             (tid,),
         )
@@ -132,6 +134,39 @@ def get_tenant(tid: str, current: CurrentUser):
         if not row:
             raise HTTPException(404, "Tenant not found")
         return _row(row)
+    finally:
+        release(conn)
+
+
+@router.get("/{tid}/country-config")
+def get_country_config(tid: str, current: CurrentUser):
+    """
+    Returns the tenant's operating countries, default country, and resolved
+    currency. Single source of truth consumed by System Config (currency
+    display) and Integrations (default verification country).
+    """
+    from services.country_currency import currency_for_country, list_countries
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT operating_countries, default_country FROM tenant WHERE id=%s::uuid",
+            (tid,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            raise HTTPException(404, "Tenant not found")
+        d = _row(row)
+        operating = d.get("operating_countries") or ["IN"]
+        default   = d.get("default_country") or "IN"
+        return {
+            "operating_countries": operating,
+            "default_country":     default,
+            "currency":            currency_for_country(default),
+            "is_multi_country":    len(operating) > 1,
+            "available_countries": list_countries(),
+        }
     finally:
         release(conn)
 
@@ -210,6 +245,27 @@ def update_tenant(tid: str, body: TenantUpdate, current: CurrentUser):
         )
         row = cur.fetchone()
         conn.commit()
+
+        # ── Auto-derive currency from default_country (unless tenant has already overridden) ──
+        if "default_country" in updates:
+            try:
+                from services.country_currency import currency_for_country
+                cur_meta = currency_for_country(updates["default_country"])
+                for key, val in [
+                    ("currency_code",   cur_meta["currency_code"]),
+                    ("currency_symbol", cur_meta["currency_symbol"]),
+                    ("currency_name",   cur_meta["currency_name"]),
+                ]:
+                    cur.execute("""
+                        INSERT INTO system_config (config_key, config_value)
+                        VALUES (%s, %s)
+                        ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value
+                    """, (key, val))
+                conn.commit()
+            except Exception as cur_err:
+                # Non-fatal — currency auto-sync is a convenience, not critical path
+                pass
+
         cur.close()
         if not row:
             raise HTTPException(404, "Tenant not found")

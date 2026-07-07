@@ -13,6 +13,7 @@ import {
   CaretRightOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAuthStore } from '../context/authStore'
 import PhysicianRegistryTab from './PhysicianRegistryTab'
 import { GSTModalConfigTab } from './GSTModalConfigTab'
 
@@ -164,6 +165,52 @@ function GeneralTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: str
         </Form>
       </div>
 
+      <div style={card}>
+        <div style={secTitle}>Policy Number Settings</div>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:16 }}>
+            <Form.Item name="policy_number_prefix" label="Prefix" help="e.g. RUW">
+              <Input placeholder="RUW" maxLength={10}/>
+            </Form.Item>
+            <Form.Item name="policy_number_digits" label="Sequence Digits" help="Zero-padded width">
+              <Select>
+                {[4,5,6,7,8,9,10].map(d => <Option key={d} value={String(d)}>{d} digits</Option>)}
+              </Select>
+            </Form.Item>
+            <Form.Item name="policy_number_suffix" label="Suffix (optional)" help="e.g. -IN or product code">
+              <Input placeholder="" maxLength={10}/>
+            </Form.Item>
+            <Form.Item name="policy_grace_period_days" label="Grace Period (days)"
+              help="Before policy lapses">
+              <InputNumber min={0} max={180} style={{ width:'100%' }} placeholder="30"/>
+            </Form.Item>
+          </div>
+          <Form.Item shouldUpdate noStyle>
+            {() => {
+              const v = form.getFieldsValue()
+              const prefix = v.policy_number_prefix || 'RUW'
+              const digits = parseInt(v.policy_number_digits || '6')
+              const suffix = v.policy_number_suffix || ''
+              const year = new Date().getFullYear().toString().slice(-2)
+              const example = `${prefix}-${year}-${'1'.padStart(digits,'0')}${suffix}`
+              return (
+                <div style={{
+                  background:'rgba(0,212,170,0.06)', border:'1px solid rgba(0,212,170,0.2)',
+                  borderRadius:8, padding:'10px 14px', marginTop:4, marginBottom:8,
+                }}>
+                  <span style={{ fontSize:11, color:'#6b7280', marginRight:8 }}>PREVIEW:</span>
+                  <code style={{ fontSize:14, color:'#00d4aa', fontWeight:700 }}>{example}</code>
+                </div>
+              )
+            }}
+          </Form.Item>
+          <div style={{ fontSize:11, color:'#6b7280' }}>
+            Policy numbers are sequential across all products. The sequence is atomic and
+            collision-free regardless of which product the policy belongs to.
+          </div>
+        </Form>
+      </div>
+
       {/* UW Thresholds info — moved to product level */}
       <div style={{ ...card, borderColor:'rgba(251,191,36,0.2)', background:'rgba(251,191,36,0.04)' }}>
         <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
@@ -191,6 +238,128 @@ function GeneralTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: str
 // ══════════════════════════════════════════════════════════════════════════════
 // TAB 2 — Currency
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// Operating Countries Tab — drives currency + integrations defaults
+// ══════════════════════════════════════════════════════════════════════════════
+const COUNTRY_OPTIONS = [
+  { code: 'IN', flag: '🇮🇳', name: 'India',           currency: 'INR (₹)' },
+  { code: 'AE', flag: '🇦🇪', name: 'United Arab Emirates', currency: 'AED (د.إ)' },
+  { code: 'SG', flag: '🇸🇬', name: 'Singapore',       currency: 'SGD (S$)' },
+  { code: 'GB', flag: '🇬🇧', name: 'United Kingdom',  currency: 'GBP (£)' },
+  { code: 'US', flag: '🇺🇸', name: 'United States',   currency: 'USD ($)' },
+]
+
+function OperatingCountriesTab({ tenantId, onCountryChanged }: { tenantId: string; onCountryChanged: () => void }) {
+  const [operating, setOperating] = useState<string[]>(['IN'])
+  const [defaultC, setDefaultC]   = useState('IN')
+  const [loading, setLoading]     = useState(true)
+  const [saving, setSaving]       = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const d = await sysApi.get(`/tenants/${tenantId}/country-config`)
+      setOperating(d?.operating_countries || ['IN'])
+      setDefaultC(d?.default_country || 'IN')
+    } catch { message.error('Failed to load country config') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { if (tenantId) load() }, [tenantId])
+
+  const save = async () => {
+    if (operating.length === 0) { message.error('Select at least one operating country'); return }
+    if (!operating.includes(defaultC)) { message.error('Default country must be one of the selected operating countries'); return }
+    setSaving(true)
+    try {
+      await sysApi.patch(`/tenants/${tenantId}`, { operating_countries: operating, default_country: defaultC })
+      message.success('Operating countries saved — currency auto-updated')
+      onCountryChanged()
+      load()
+    } catch { message.error('Save failed') }
+    finally { setSaving(false) }
+  }
+
+  if (loading) return <Spin/>
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
+        Select the countries this tenant operates in. The default country drives currency
+        and is used automatically for external verification checks (CKYC, CIBIL, etc.).
+        Select multiple countries if this tenant manages insurers across regions.
+      </div>
+      <div style={card}>
+        <div style={secTitle}>Operating Countries</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
+          {COUNTRY_OPTIONS.map(c => (
+            <label key={c.code} style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+              borderRadius: 8, cursor: 'pointer',
+              background: operating.includes(c.code) ? 'rgba(0,212,170,0.08)' : 'rgba(255,255,255,0.02)',
+              border: `1px solid ${operating.includes(c.code) ? 'rgba(0,212,170,0.3)' : 'rgba(255,255,255,0.07)'}`,
+            }}>
+              <input
+                type="checkbox"
+                checked={operating.includes(c.code)}
+                onChange={e => {
+                  if (e.target.checked) setOperating(prev => [...prev, c.code])
+                  else {
+                    const next = operating.filter(x => x !== c.code)
+                    setOperating(next)
+                    if (defaultC === c.code && next.length) setDefaultC(next[0])
+                  }
+                }}
+              />
+              <span style={{ fontSize: 18 }}>{c.flag}</span>
+              <div>
+                <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>{c.currency}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        {operating.length > 1 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>
+              Default Country (used unless a verification call specifies otherwise)
+            </div>
+            <Select value={defaultC} onChange={setDefaultC} style={{ width: '100%' }}>
+              {COUNTRY_OPTIONS.filter(c => operating.includes(c.code)).map(c => (
+                <Option key={c.code} value={c.code}>{c.flag} {c.name}</Option>
+              ))}
+            </Select>
+          </div>
+        )}
+
+        {operating.length === 1 && (
+          <div style={{ background: 'rgba(0,212,170,0.05)', border: '1px solid rgba(0,212,170,0.15)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#9ca3af' }}>
+            Single-country tenant — all verification checks and currency will default to{' '}
+            <strong style={{ color: '#00d4aa' }}>
+              {COUNTRY_OPTIONS.find(c => c.code === operating[0])?.flag} {COUNTRY_OPTIONS.find(c => c.code === operating[0])?.name}
+            </strong>{' '}automatically, with no country selector shown to users.
+          </div>
+        )}
+
+        {operating.length > 1 && (
+          <div style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.15)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#9ca3af' }}>
+            Multi-country tenant — underwriters will see a country selector when running
+            verification checks, scoped to your {operating.length} selected countries.
+          </div>
+        )}
+
+        <Button type="primary" icon={<SaveOutlined/>} loading={saving} onClick={save}>
+          Save Operating Countries
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
 function CurrencyTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: string, v: string) => Promise<void> }) {
   const [form] = Form.useForm()
   const [selCode, setSelCode] = useState('INR')
@@ -225,6 +394,8 @@ function CurrencyTab({ configs, onSave }: { configs: SysConfig[]; onSave: (k: st
     <div style={{ maxWidth: 560 }}>
       <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>
         Set the currency for all premium and face amount displays.
+        Currency is auto-set from your Operating Countries selection above —
+        change it here only if this tenant needs an override (e.g. a UAE entity invoicing in USD).
       </div>
       <div style={card}>
         <div style={secTitle}>Currency Settings</div>
@@ -2188,9 +2359,196 @@ function UserLabelsTab() {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════E SHELL
+// ══════════════════════════════════════════════════════════════════════════════
+// AI Audit Tab
+// ══════════════════════════════════════════════════════════════════════════════
+function AIAuditTab() {
+  const [logs, setLogs]           = useState<any[]>([])
+  const [agreement, setAgreement] = useState<any>({})
+  const [loading, setLoading]     = useState(true)
+  const [engine, setEngine]       = useState('ALL')
+  const [source, setSource]       = useState('ALL')
+  const [search, setSearch]       = useState('')
+  const [total, setTotal]         = useState(0)
+  const [page, setPage]           = useState(1)
+
+  const load = () => {
+    setLoading(true)
+    sysApi.get('/underwriting/ai-audit', { engine, source, page_size: 50, page })
+      .then(d => {
+        setLogs(Array.isArray(d?.logs) ? d.logs : [])
+        setTotal(d?.total ?? 0)
+        setAgreement(d?.agreement ?? {})
+      })
+      .catch(() => setLogs([]))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [engine, source, page])
+
+  const filtered = search
+    ? logs.filter(l =>
+        (l.applicant_ref || '').toLowerCase().includes(search.toLowerCase()) ||
+        (l.product_code  || '').toLowerCase().includes(search.toLowerCase()) ||
+        (l.engine        || '').toLowerCase().includes(search.toLowerCase())
+      )
+    : logs
+
+  const TIER_COLOR: Record<string,string> = {
+    STANDARD:'#22c55e', SUBSTANDARD:'#f59e0b', RATED:'#f97316', DECLINED:'#ef4444'
+  }
+  const ENGINE_LABEL: Record<string,string> = {
+    xgboost:'⚡ XGBoost', claude:'🧠 Claude', ollama:'🦙 Ollama'
+  }
+  const SOURCE_LABEL: Record<string,string> = {
+    EVALUATE:'🖥️ Evaluate', BATCH:'📦 Batch', WORKBENCH:'🗂️ Workbench'
+  }
+
+  const statCard = (label: string, value: any, color: string) => (
+    <div style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)',
+      borderRadius:10, padding:'14px 20px', textAlign:'center', flex:1 }}>
+      <div style={{ fontSize:22, fontWeight:700, color, fontFamily:'var(--font-mono,monospace)' }}>{value ?? '—'}</div>
+      <div style={{ fontSize:11, color:'#6b7280', marginTop:4 }}>{label}</div>
+    </div>
+  )
+
+  const agreementRate = agreement?.agreement_rate
+  const rateColor = agreementRate == null ? '#6b7280'
+    : agreementRate >= 80 ? '#22c55e'
+    : agreementRate >= 60 ? '#fbbf24' : '#ef4444'
+
+  const columns = [
+    { title:'Time', dataIndex:'created_at', width:130,
+      render:(v:string) => <span style={{ fontSize:11, color:'#6b7280', fontFamily:'var(--font-mono,monospace)' }}>{v?.slice(0,16).replace('T',' ')}</span> },
+    { title:'Source', dataIndex:'source', width:120,
+      render:(v:string) => <Tag style={{ fontSize:10 }}>{SOURCE_LABEL[v]||v}</Tag> },
+    { title:'Engine', dataIndex:'engine', width:120,
+      render:(v:string) => <Tag style={{ fontSize:10, color:'#00d4aa', borderColor:'rgba(0,212,170,0.3)', background:'rgba(0,212,170,0.08)' }}>{ENGINE_LABEL[v]||v}</Tag> },
+    { title:'Applicant', dataIndex:'applicant_ref', width:130,
+      render:(v:string, r:any) => (
+        <div>
+          <div style={{ fontSize:12, color:'#e2e8f0', fontFamily:'var(--font-mono,monospace)' }}>{v}</div>
+          <div style={{ fontSize:10, color:'#6b7280' }}>{r.product_code}</div>
+        </div>
+      ) },
+    { title:'Risk Tier', dataIndex:'risk_tier', width:110,
+      render:(v:string) => v ? (
+        <Tag style={{ color:TIER_COLOR[v]||'#9ca3af', borderColor:(TIER_COLOR[v]||'#9ca3af')+'40',
+          background:(TIER_COLOR[v]||'#9ca3af')+'15', fontSize:10 }}>{v}</Tag>
+      ) : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'Score', dataIndex:'risk_score', width:70,
+      render:(v:number) => v!=null ? <span style={{ fontFamily:'var(--font-mono,monospace)', fontSize:12, color:'#fbbf24' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'AI Rec.', dataIndex:'recommendation', width:100,
+      render:(v:string) => v ? (
+        <Tag color={v==='APPROVE'?'success':v==='DECLINE'?'error':'warning'} style={{ fontSize:10 }}>{v}</Tag>
+      ) : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'Rules Outcome', dataIndex:'rules_outcome', width:140,
+      render:(v:string) => v ? <span style={{ fontSize:11, color:'#9ca3af' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span> },
+    { title:'Human Decision', dataIndex:'human_decision', width:150,
+      render:(v:string) => v ? (
+        <Tag color={v.includes('APPROV')?'success':v.includes('DECLIN')?'error':'default'} style={{ fontSize:10 }}>{v}</Tag>
+      ) : <span style={{ fontSize:11, color:'#4b5563' }}>Pending</span> },
+    { title:'Match', dataIndex:'matches_ai', width:90,
+      render:(v:boolean|null) => v===null||v===undefined
+        ? <span style={{ color:'#4b5563', fontSize:11 }}>—</span>
+        : v ? <span style={{ color:'#22c55e', fontSize:12 }}>✓ Match</span>
+            : <span style={{ color:'#ef4444', fontSize:12 }}>✗ Override</span> },
+    { title:'By', dataIndex:'requested_by', width:100,
+      render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v||'—'}</span> },
+  ]
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+        {statCard('Total AI Calls', total, '#00d4aa')}
+        {statCard('Human Reviewed', agreement?.reviewed ?? 0, '#60a5fa')}
+        {statCard('AI Matched', agreement?.matched ?? 0, '#22c55e')}
+        {statCard('Human Override', agreement?.overridden ?? 0, '#f87171')}
+        {statCard('Agreement Rate', agreementRate!=null ? `${agreementRate}%` : '—', rateColor)}
+      </div>
+
+      {agreementRate!=null && (
+        <div style={{ background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.07)',
+          borderRadius:8, padding:'10px 16px', marginBottom:16, fontSize:12, color:'#9ca3af' }}>
+          {agreementRate>=80
+            ? `✅ Underwriters agree with AI recommendations ${agreementRate}% of the time — AI calibration is strong.`
+            : agreementRate>=60
+            ? `⚠️ Underwriters override AI ${100-agreementRate}% of the time — consider reviewing AI model calibration.`
+            : `🔴 High override rate (${100-agreementRate}%) — AI recommendations may need tuning.`}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:10, marginBottom:14 }}>
+        <Input placeholder="Search applicant, product..." value={search}
+          onChange={e => setSearch(e.target.value)} style={{ maxWidth:260 }} size="small" allowClear/>
+        <Select value={engine} onChange={v => { setEngine(v); setPage(1) }} size="small" style={{ width:160 }}>
+          <Select.Option value="ALL">All engines</Select.Option>
+          <Select.Option value="xgboost">⚡ XGBoost</Select.Option>
+          <Select.Option value="claude">🧠 Claude</Select.Option>
+          <Select.Option value="ollama">🦙 Ollama</Select.Option>
+        </Select>
+        <Select value={source} onChange={v => { setSource(v); setPage(1) }} size="small" style={{ width:170 }}>
+          <Select.Option value="ALL">All sources</Select.Option>
+          <Select.Option value="EVALUATE">🖥️ Single Evaluate</Select.Option>
+          <Select.Option value="BATCH">📦 Batch</Select.Option>
+          <Select.Option value="WORKBENCH">🗂️ Workbench</Select.Option>
+        </Select>
+        <Button size="small" onClick={load}>🔄 Refresh</Button>
+      </div>
+
+      {loading ? <div style={{ textAlign:'center', padding:40 }}><Spin/></div> : (
+        <Table
+          dataSource={filtered}
+          columns={columns}
+          rowKey="id"
+          size="small"
+          scroll={{ x:1300 }}
+          pagination={{ pageSize:50, current:page, total, onChange:p => setPage(p), showTotal:t => `${t} AI calls` }}
+          expandable={{
+            expandedRowRender:(r:any) => (
+              <div style={{ padding:'12px 16px', background:'rgba(0,0,0,0.2)', borderRadius:6 }}>
+                {r.narrative && (
+                  <div style={{ marginBottom:10 }}>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>AI Narrative</div>
+                    <div style={{ fontSize:12, color:'#9ca3af', lineHeight:1.6 }}>{r.narrative}</div>
+                  </div>
+                )}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+                  <div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Concerns</div>
+                    {(typeof r.primary_concerns==='string' ? JSON.parse(r.primary_concerns||'[]') : r.primary_concerns||[])
+                      .map((c:string,i:number) => <div key={i} style={{ fontSize:11, color:'#f87171' }}>⚠ {c}</div>)}
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Positives</div>
+                    {(typeof r.positive_factors==='string' ? JSON.parse(r.positive_factors||'[]') : r.positive_factors||[])
+                      .map((f:string,i:number) => <div key={i} style={{ fontSize:11, color:'#22c55e' }}>✓ {f}</div>)}
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.06em' }}>Loading Suggestion</div>
+                    <div style={{ fontSize:11, color:'#9ca3af' }}>{r.loading_suggestion||'—'}</div>
+                    <div style={{ fontSize:10, color:'#6b7280', marginTop:8 }}>Confidence: {r.confidence!=null ? `${Math.round(r.confidence*100)}%`:'—'}</div>
+                    {r.human_decided_at && <div style={{ fontSize:10, color:'#6b7280', marginTop:4 }}>Decided: {r.human_decided_at?.slice(0,16)} by {r.human_decided_by}</div>}
+                  </div>
+                </div>
+              </div>
+            ),
+            rowExpandable:(r:any) => !!(r.narrative||r.primary_concerns||r.positive_factors),
+          }}
+          locale={{ emptyText:<div style={{ color:'#6b7280', padding:24 }}>No AI decisions logged yet. Use the AI Assist feature in Evaluate or Batch to generate entries.</div> }}
+        />
+      )}
+    </div>
+  )
+}
+
+
 // ══════════════════════════════════════════════════════════════════════════════
 export default function SystemConfigPage() {
+  const { user } = useAuthStore()
+  const tenantId = user?.tenant_id || ''
   const [configs, setConfigs] = useState<SysConfig[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -2254,6 +2612,11 @@ export default function SystemConfigPage() {
       key: 'general',
       label: <span><SettingOutlined/> General</span>,
       children: <GeneralTab configs={configs} onSave={saveConfig}/>,
+    },
+    {
+      key: 'countries',
+      label: <span>🌍 Operating Countries</span>,
+      children: <OperatingCountriesTab tenantId={tenantId} onCountryChanged={load}/>,
     },
     {
       key: 'currency',
@@ -2322,6 +2685,11 @@ export default function SystemConfigPage() {
       key: 'physicians',
       label: <span>🩺 Physician Registry</span>,
       children: <PhysicianRegistryTab />,
+    },
+    {
+      key: 'ai-audit',
+      label: <span>🤖 AI Audit</span>,
+      children: <AIAuditTab />,
     },
   ]
 

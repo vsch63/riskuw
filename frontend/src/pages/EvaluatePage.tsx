@@ -742,6 +742,15 @@ export default function EvaluatePage() {
 
     const payload: EvaluatePayload = {
       applicant_ref:    v.applicant_ref ?? 'APP-001',
+      premium_mode:     v.premium_mode ?? 'ANNUAL',
+      first_name:       v.first_name ?? '',
+      middle_name:      v.middle_name ?? '',
+      last_name:        v.last_name ?? '',
+      email:            v.email ?? '',
+      mobile:           v.mobile ?? '',
+      address_line1:    v.address_line1 ?? '',
+      city:             v.city ?? '',
+      pincode:          v.pincode ?? '',
       age:              v.age,
       gender:           v.gender,
       state:            v.state,
@@ -993,7 +1002,6 @@ export default function EvaluatePage() {
 
         <Form
           form={form}
-          form={form}
           layout="vertical"
           initialValues={{
             applicant_ref: 'APP-001',
@@ -1053,6 +1061,43 @@ export default function EvaluatePage() {
             </Form.Item>
           </div>
 
+          {/* ── APPLICANT NAME ── */}
+          <SectionLabel>Applicant Name</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="first_name" label="First Name" rules={[{ required: true, message: 'First name required' }]}>
+              <Input placeholder="e.g. Rahul" />
+            </Form.Item>
+            <Form.Item name="middle_name" label="Middle Name">
+              <Input placeholder="Optional" />
+            </Form.Item>
+            <Form.Item name="last_name" label="Last Name" rules={[{ required: true, message: 'Last name required' }]}>
+              <Input placeholder="e.g. Sharma" />
+            </Form.Item>
+          </div>
+
+          {/* ── CONTACT DETAILS ── */}
+          <SectionLabel>Contact Details</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="email" label="Email" rules={[{ type: 'email', message: 'Enter valid email' }]}
+              style={{ gridColumn: 'span 2' }}>
+              <Input placeholder="applicant@email.com" />
+            </Form.Item>
+            <Form.Item name="mobile" label="Mobile">
+              <Input placeholder="+91 98765 43210" />
+            </Form.Item>
+            <Form.Item name="pincode" label="Pincode">
+              <Input placeholder="400001" />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="address_line1" label="Address Line 1">
+              <Input placeholder="House/Flat No., Street" />
+            </Form.Item>
+            <Form.Item name="city" label="City">
+              <Input placeholder="Mumbai" />
+            </Form.Item>
+          </div>
+
           {/* ── COVERAGE ── */}
           <SectionLabel>Coverage</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
@@ -1068,6 +1113,14 @@ export default function EvaluatePage() {
                 parser={(v: any) => Number(v!.replace(/₹\s?|(,*)/g, '')) as any}
                 style={{ width: '100%' }}
               />
+            </Form.Item>
+            <Form.Item name="premium_mode" label="Premium Mode" help="Payment frequency for premium collection">
+              <Select placeholder="Select mode…" defaultValue="ANNUAL">
+                <Option value="ANNUAL">Annual</Option>
+                <Option value="HALF_YEARLY">Half Yearly</Option>
+                <Option value="QUARTERLY">Quarterly</Option>
+                <Option value="MONTHLY">Monthly</Option>
+              </Select>
             </Form.Item>
             <Form.Item name="term_yrs" label="Term (years)" help="Policy duration in years">
               {terms.length > 0 ? (
@@ -1562,3 +1615,4 @@ export default function EvaluatePage() {
     </div>
   )
 }
+
