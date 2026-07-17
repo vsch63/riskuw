@@ -50,6 +50,8 @@ export const productsAPI = {
 export const uwAPI = {
   evaluate: (payload: object) =>
     api.post('/underwriting/evaluate', payload),
+  aiScore: (payload: object) =>
+    api.post('/underwriting/ai-score', payload),
   getCases: (pageSize = 50) =>
     api.get(`/queue/?page_size=${pageSize}`),
   getCase: (id: string) => api.get(`/queue/${id}`),

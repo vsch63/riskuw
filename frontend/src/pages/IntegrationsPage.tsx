@@ -514,18 +514,46 @@ function VerificationHistoryTab() {
 // Run Verification Tab
 // ══════════════════════════════════════════════════════════════════════════════
 function RunVerificationTab() {
-  const [appRef, setAppRef]     = useState('')
-  const [type, setType]         = useState('IDENTITY')
-  const [country, setCountry]   = useState('')          // resolved from tenant; '' = use tenant default
+  const [appRef, setAppRef]       = useState('')
+  const [type, setType]           = useState('IDENTITY')
+  const [country, setCountry]     = useState('')
   const [tenantCtx, setTenantCtx] = useState<any>(null)
-  const [running, setRunning]   = useState(false)
-  const [result, setResult]     = useState<any>(null)
+  const [countryTypes, setCountryTypes] = useState<Record<string, string[]>>({})
+  const [running, setRunning]     = useState(false)
+  const [result, setResult]       = useState<any>(null)
+
+  // Provider matrix per country — built from /integrations/providers
+  const loadCountryTypes = () => {
+    intApi.get('/integrations/providers')
+      .then((d: any[]) => {
+        const matrix: Record<string, string[]> = {}
+        if (Array.isArray(d)) {
+          d.filter(p => p.is_enabled).forEach(p => {
+            if (!matrix[p.country_code]) matrix[p.country_code] = []
+            if (!matrix[p.country_code].includes(p.integration_type)) {
+              matrix[p.country_code].push(p.integration_type)
+            }
+          })
+        }
+        setCountryTypes(matrix)
+      })
+      .catch(() => {})
+  }
 
   useEffect(() => {
     intApi.get('/integrations/tenant-context')
       .then(d => { setTenantCtx(d); if (d?.default_country) setCountry(d.default_country) })
       .catch(() => {})
+    loadCountryTypes()
   }, [])
+
+  // When country changes, reset type to first available for that country
+  useEffect(() => {
+    if (country && countryTypes[country]) {
+      const available = countryTypes[country]
+      if (!available.includes(type)) setType(available[0] || 'IDENTITY')
+    }
+  }, [country, countryTypes])
 
   const run = async () => {
     if (!appRef.trim()) { message.error('Enter an applicant ref'); return }
@@ -546,6 +574,11 @@ function RunVerificationTab() {
   const meta = TYPE_META[type] || { icon: '🔌', label: type, color: '#94a3b8' }
   const availableCountries = tenantCtx?.available_countries || []
 
+  // Types available for currently selected country
+  const availableTypes = country && countryTypes[country]
+    ? countryTypes[country]
+    : Object.keys(TYPE_META)
+
   return (
     <div style={{ maxWidth: 600 }}>
       <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
@@ -561,7 +594,17 @@ function RunVerificationTab() {
           </Select>
         )}
         <Select value={type} onChange={setType} style={{ width: 200 }}>
-          {Object.entries(TYPE_META).map(([k,v]) => <Option key={k} value={k}>{v.icon} {v.label}</Option>)}
+          {Object.entries(TYPE_META).map(([k, v]) => {
+            const isAvailable = availableTypes.includes(k)
+            return (
+              <Option key={k} value={k} disabled={!isAvailable}>
+                <span style={{ opacity: isAvailable ? 1 : 0.4 }}>
+                  {v.icon} {v.label}
+                  {!isAvailable && ' (no provider)'}
+                </span>
+              </Option>
+            )
+          })}
         </Select>
         <Button type="primary" loading={running} onClick={run} icon={<PlayCircleOutlined/>}>
           Run Check
@@ -569,8 +612,15 @@ function RunVerificationTab() {
       </div>
       {tenantCtx && !tenantCtx.is_multi_country && (
         <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12, marginTop: -8 }}>
-          Using {tenantCtx.currency?.flag || '🌍'} {tenantCtx.currency?.country_name || tenantCtx.default_country} (your tenant's configured country) ·{' '}
+          Using {tenantCtx.available_countries?.[0]?.flag || '🌍'} {tenantCtx.available_countries?.[0]?.country_name || tenantCtx.default_country} ·{' '}
+          {availableTypes.length} verification type{availableTypes.length !== 1 ? 's' : ''} available ·{' '}
           <a href="/system-config" style={{ color: '#00d4aa' }}>change in System Config</a>
+        </div>
+      )}
+      {tenantCtx?.is_multi_country && country && (
+        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12, marginTop: -8 }}>
+          {availableTypes.length} verification type{availableTypes.length !== 1 ? 's' : ''} available for {availableCountries.find((c: any) => c.code === country)?.country_name || country}
+          {availableTypes.length < 6 && ' · Add providers in Provider Config to enable more types'}
         </div>
       )}
 

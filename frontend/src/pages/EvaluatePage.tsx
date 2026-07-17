@@ -108,6 +108,157 @@ function DataRow({ label, value, mono = false, highlight = false }: {
 }
 
 // ─── Decision Panel ──────────────────────────────────────────────
+
+// ── AI Assessment Panel ───────────────────────────────────────────────────────
+function AIAssessmentPanel({ aiScore, loading }: { aiScore: any; loading: boolean }) {
+  if (!loading && !aiScore) return null
+
+  const RISK_COLOR: Record<string, string> = {
+    LOW: '#22c55e', MEDIUM: '#f59e0b', HIGH: '#ef4444',
+    VERY_HIGH: '#dc2626', DECLINED: '#dc2626',
+  }
+  const REC_COLOR: Record<string, string> = {
+    APPROVE: '#22c55e', RATE: '#f59e0b', REFER: '#f59e0b',
+    DECLINE: '#ef4444', DECLINED: '#ef4444',
+  }
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(15,118,110,0.08), rgba(8,145,178,0.06))',
+      border: '1px solid rgba(0,212,170,0.2)',
+      borderRadius: 12, padding: '16px 18px', marginBottom: 14, flexShrink: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 16 }}>🤖</span>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#00d4aa', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          AI Risk Assessment
+        </div>
+        <div style={{ marginLeft: 'auto', fontSize: 10, color: '#6b7280' }}>XGBoost ML Engine</div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#6b7280', fontSize: 12 }}>
+          <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⟳</span>
+          Analysing risk profile...
+        </div>
+      ) : aiScore?.error ? (
+        <div style={{ fontSize: 12, color: '#f87171' }}>{aiScore.error}</div>
+      ) : aiScore && (
+        <>
+          {/* Score bar */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: '#9ca3af' }}>AI Risk Score</span>
+              <span style={{ fontSize: 20, fontWeight: 800, color: RISK_COLOR[aiScore.risk_tier] || '#e2e8f0' }}>
+                {aiScore.risk_score?.toFixed(1)}<span style={{ fontSize: 12, fontWeight: 400, color: '#6b7280' }}>/100</span>
+              </span>
+            </div>
+            <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 3,
+                width: `${aiScore.risk_score ?? 0}%`,
+                background: `linear-gradient(90deg, #22c55e, ${RISK_COLOR[aiScore.risk_tier] || '#00d4aa'})`,
+                transition: 'width 0.8s ease',
+              }}/>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+              <span style={{ fontSize: 9, color: '#6b7280' }}>Low Risk (0)</span>
+              <span style={{ fontSize: 9, color: '#6b7280' }}>High Risk (100)</span>
+            </div>
+          </div>
+
+          {/* Recommendation + confidence */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            <div style={{
+              flex: 1, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px',
+              border: `1px solid ${REC_COLOR[aiScore.recommendation] || '#374151'}33`,
+            }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>AI Recommendation</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: REC_COLOR[aiScore.recommendation] || '#e2e8f0' }}>
+                {aiScore.recommendation}
+              </div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>Confidence</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>
+                {((aiScore.confidence ?? 0) * 100).toFixed(0)}%
+              </div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>Risk Tier</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: RISK_COLOR[aiScore.risk_tier] || '#e2e8f0' }}>
+                {aiScore.risk_tier}
+              </div>
+            </div>
+          </div>
+
+          {/* Concerns & positives */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            {aiScore.primary_concerns?.length > 0 && (
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: '#f87171', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  ⚠ Primary Concerns
+                </div>
+                {aiScore.primary_concerns.map((c: string, i: number) => (
+                  <div key={i} style={{
+                    fontSize: 11, color: '#fca5a5', padding: '4px 8px', marginBottom: 4,
+                    background: 'rgba(239,68,68,0.08)', borderRadius: 5,
+                    borderLeft: '2px solid rgba(239,68,68,0.4)',
+                  }}>{c}</div>
+                ))}
+              </div>
+            )}
+            {aiScore.positive_factors?.length > 0 && (
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: '#4ade80', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  ✓ Positive Factors
+                </div>
+                {aiScore.positive_factors.map((f: string, i: number) => (
+                  <div key={i} style={{
+                    fontSize: 11, color: '#86efac', padding: '4px 8px', marginBottom: 4,
+                    background: 'rgba(34,197,94,0.08)', borderRadius: 5,
+                    borderLeft: '2px solid rgba(34,197,94,0.4)',
+                  }}>{f}</div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Narrative */}
+          {aiScore.narrative && (
+            <div style={{
+              background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px',
+              border: '1px solid rgba(255,255,255,0.06)', marginBottom: aiScore.loading_suggestion ? 10 : 0,
+            }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                AI Narrative
+              </div>
+              <div style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7 }}>{aiScore.narrative}</div>
+            </div>
+          )}
+
+          {/* Loading suggestion */}
+          {aiScore.loading_suggestion && aiScore.recommendation !== 'DECLINE' && (
+            <div style={{
+              marginTop: 10, padding: '8px 12px',
+              background: 'rgba(245,158,11,0.08)', borderRadius: 7,
+              border: '1px solid rgba(245,158,11,0.2)',
+              fontSize: 11, color: '#fcd34d',
+            }}>
+              💡 <strong>Loading Suggestion:</strong> {aiScore.loading_suggestion}
+            </div>
+          )}
+
+          {/* Audit note */}
+          <div style={{ marginTop: 10, fontSize: 10, color: '#374151', textAlign: 'right' }}>
+            AI assessment logged to audit trail · Human decision takes precedence
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function DecisionCard({ result, loading, appRef }: {
   result: UWDecision | null; loading: boolean; appRef: string
 }) {
@@ -654,7 +805,7 @@ export default function EvaluatePage() {
   }[]>([])
 
   // AI Assist state
-  const [aiEngine, setAiEngine]     = useState('xgboost')
+  const [aiEngine, setAiEngine]     = useState('claude')
   const [aiResult, setAiResult]     = useState<any>(null)
   const [aiLoading, setAiLoading]   = useState(false)
   const [lastPayload, setLastPayload] = useState<any>(null)
@@ -861,6 +1012,12 @@ export default function EvaluatePage() {
       const res = await uwAPI.evaluate(payload)
       setResult(res.data)
       setLastPayload((p: any) => ({ ...p, uw_outcome: res.data?.outcome || '', net_debit_points: res.data?.net_debit_points || 0 }))
+      // Fetch AI assessment in background
+      setAiLoading(true)
+      setAiResult(null)
+      uwAPI.aiScore({ ...payload, engine: 'xgboost' }).then((r: any) => {
+        setAiResult(r.data)
+      }).catch(() => {}).finally(() => setAiLoading(false))
       // Accumulate for Session Analytics
       setSessionCases(prev => [...prev, {
         Ref:     payload.applicant_ref ?? appRef,
@@ -1463,6 +1620,7 @@ export default function EvaluatePage() {
         </div>
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <DecisionCard result={result} loading={submitting} appRef={appRef} />
+          <AIAssessmentPanel aiScore={aiResult} loading={aiLoading} />
         </div>
 
         {/* ── AI Assist Panel ── */}
@@ -1474,14 +1632,13 @@ export default function EvaluatePage() {
             borderRadius: 12, padding: '16px 18px',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 16 }}>🤖</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#00d4aa' }}>AI Risk Assessment</span>
-              <span style={{ fontSize: 11, color: '#4b5563', marginLeft: 4 }}>Independent AI opinion</span>
+              <span style={{ fontSize: 16 }}>🧠</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#00d4aa' }}>LLM Second Opinion</span>
+              <span style={{ fontSize: 11, color: '#4b5563', marginLeft: 4 }}>Claude AI · Ollama · on-demand</span>
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <Select value={aiEngine} onChange={setAiEngine} size="small" style={{ flex: 1 }}>
-                <Option value="xgboost">⚡ XGBoost ML (Fast, local)</Option>
                 <Option value="claude">🧠 Claude AI (Anthropic)</Option>
                 <Option value="ollama">🦙 Ollama LLM (Local)</Option>
               </Select>
@@ -1516,7 +1673,7 @@ export default function EvaluatePage() {
             {aiLoading && (
               <div style={{ textAlign: 'center', padding: '12px 0', color: '#6b7280', fontSize: 12 }}>
                 <Spin size="small" style={{ marginRight: 8 }}/>
-                {aiEngine === 'xgboost' ? 'Running ML model...' : aiEngine === 'claude' ? 'Asking Claude AI...' : 'Querying Ollama LLM...'}
+                {aiEngine === 'claude' ? 'Asking Claude AI...' : 'Querying Ollama LLM...'}
               </div>
             )}
 

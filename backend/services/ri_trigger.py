@@ -28,6 +28,7 @@ def check_and_trigger_reinsurance(
     approved_premium: float | None,
     applicant_ref: str,
     submitted_by: str = "system",
+    batch_mode: bool = False,
 ) -> dict:
     """
     Check if this case requires reinsurance and create cession if so.
@@ -143,31 +144,32 @@ def check_and_trigger_reinsurance(
         ) if cession_row else None
 
 
-        # ── Reinsurer email notification ──────────────────────────────────────
-        try:
-            ncur = conn.cursor()
-            ncur.execute("SELECT contact_email, reinsurer_name FROM ri_reinsurer WHERE id=%s", (ri["id"],))
-            ri_row = ncur.fetchone()
-            ncur.close()
-            if ri_row:
-                ri_dict = dict(ri_row) if hasattr(ri_row,"keys") else {"contact_email":ri_row[0],"reinsurer_name":ri_row[1]}
-                if ri_dict.get("contact_email"):
-                    from services.notification import send_ri_notification
-                    send_ri_notification(
-                        conn=conn,
-                        reinsurer_email=ri_dict["contact_email"],
-                        reinsurer_name=ri_dict.get("reinsurer_name","Reinsurer"),
-                        cession_ref=cession_ref or "",
-                        applicant_ref=applicant_ref,
-                        product_code=product_code,
-                        face_amount=face_amount,
-                        ceded_amount=ceded_amount,
-                        ri_premium=ri_premium,
-                    )
-        except Exception as ri_notif_err:
-            import logging
-            logging.getLogger("uw_platform").warning(
-                f"[NOTIF_RI_EMAIL_FAILED] RI email failed for {cession_ref}: {ri_notif_err}")
+        # ── Reinsurer email notification (skipped in batch mode) ────────────
+        if not batch_mode:
+            try:
+                ncur = conn.cursor()
+                ncur.execute("SELECT contact_email, reinsurer_name FROM ri_reinsurer WHERE id=%s", (ri["id"],))
+                ri_row = ncur.fetchone()
+                ncur.close()
+                if ri_row:
+                    ri_dict = dict(ri_row) if hasattr(ri_row,"keys") else {"contact_email":ri_row[0],"reinsurer_name":ri_row[1]}
+                    if ri_dict.get("contact_email"):
+                        from services.notification import send_ri_notification
+                        send_ri_notification(
+                            conn=conn,
+                            reinsurer_email=ri_dict["contact_email"],
+                            reinsurer_name=ri_dict.get("reinsurer_name","Reinsurer"),
+                            cession_ref=cession_ref or "",
+                            applicant_ref=applicant_ref,
+                            product_code=product_code,
+                            face_amount=face_amount,
+                            ceded_amount=ceded_amount,
+                            ri_premium=ri_premium,
+                        )
+            except Exception as ri_notif_err:
+                import logging
+                logging.getLogger("uw_platform").warning(
+                    f"[NOTIF_RI_EMAIL_FAILED] RI email failed for {cession_ref}: {ri_notif_err}")
 
         logger.info(
             f"RI cession created: {cession_ref} | {applicant_ref} | "

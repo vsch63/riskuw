@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from routers.file_security import validate_upload, sanitise_extracted_fields
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("uw_platform")
@@ -290,7 +291,8 @@ async def extract_document(file: UploadFile = File(...)):
     Returns structured JSON ready to pre-fill the evaluation form.
     """
     filename = (file.filename or "").lower()
-    file_bytes = await file.read()
+    # Security validation — size, magic bytes, page count
+    file_bytes = await validate_upload(file)
 
     if not file_bytes:
         raise HTTPException(400, "Empty file uploaded")

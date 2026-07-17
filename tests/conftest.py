@@ -9,9 +9,15 @@ import os
 BASE_URL = os.environ.get("RISKUW_BASE_URL", "http://localhost:8001")
 
 def get_token(username: str, password: str) -> str:
-    resp = requests.post(f"{BASE_URL}/auth/login", json={"username": username, "password": password})
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+    for attempt in range(5):
+        resp = requests.post(f"{BASE_URL}/auth/login",
+            json={"username": username, "password": password})
+        if resp.status_code == 429:
+            import time; time.sleep(10)
+            continue
+        resp.raise_for_status()
+        return resp.json()["access_token"]
+    raise Exception(f"Login failed after retries for {username}")
 
 @pytest.fixture(scope="session")
 def admin_token():
@@ -80,3 +86,13 @@ BORDERLINE_MALE = {
     "diabetes_type": "NONE", "heart_condition": "HYPERTENSION",
     "hazardous_activity": False, "annual_income": 800000, "existing_coverage": 0,
 }
+
+
+def pytest_configure(config):
+    """Clear login lockouts before test session starts."""
+    import subprocess
+    subprocess.run([
+        "docker", "exec", "riskuw_postgres",
+        "psql", "-U", "uw_user", "-d", "riskuw", "-c",
+        "UPDATE login_attempts SET failed_count=0, locked_until=NULL WHERE username='admin';"
+    ], capture_output=True)
