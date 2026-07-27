@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
+import DocumentUploadPanel from './DocumentUploadPanel'
+import Icd10Lookup from './Icd10Lookup'
 import {
   Form, Input, InputNumber, Select, DatePicker,
   Checkbox, Button, Spin, Tooltip, Collapse, Tag, Divider, message, Tabs,
@@ -106,6 +108,157 @@ function DataRow({ label, value, mono = false, highlight = false }: {
 }
 
 // ─── Decision Panel ──────────────────────────────────────────────
+
+// ── AI Assessment Panel ───────────────────────────────────────────────────────
+function AIAssessmentPanel({ aiScore, loading }: { aiScore: any; loading: boolean }) {
+  if (!loading && !aiScore) return null
+
+  const RISK_COLOR: Record<string, string> = {
+    LOW: '#22c55e', MEDIUM: '#f59e0b', HIGH: '#ef4444',
+    VERY_HIGH: '#dc2626', DECLINED: '#dc2626',
+  }
+  const REC_COLOR: Record<string, string> = {
+    APPROVE: '#22c55e', RATE: '#f59e0b', REFER: '#f59e0b',
+    DECLINE: '#ef4444', DECLINED: '#ef4444',
+  }
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(15,118,110,0.08), rgba(8,145,178,0.06))',
+      border: '1px solid rgba(0,212,170,0.2)',
+      borderRadius: 12, padding: '16px 18px', marginBottom: 14, flexShrink: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 16 }}>🤖</span>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#00d4aa', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          AI Risk Assessment
+        </div>
+        <div style={{ marginLeft: 'auto', fontSize: 10, color: '#6b7280' }}>XGBoost ML Engine</div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#6b7280', fontSize: 12 }}>
+          <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⟳</span>
+          Analysing risk profile...
+        </div>
+      ) : aiScore?.error ? (
+        <div style={{ fontSize: 12, color: '#f87171' }}>{aiScore.error}</div>
+      ) : aiScore && (
+        <>
+          {/* Score bar */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: '#9ca3af' }}>AI Risk Score</span>
+              <span style={{ fontSize: 20, fontWeight: 800, color: RISK_COLOR[aiScore.risk_tier] || '#e2e8f0' }}>
+                {aiScore.risk_score?.toFixed(1)}<span style={{ fontSize: 12, fontWeight: 400, color: '#6b7280' }}>/100</span>
+              </span>
+            </div>
+            <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 3,
+                width: `${aiScore.risk_score ?? 0}%`,
+                background: `linear-gradient(90deg, #22c55e, ${RISK_COLOR[aiScore.risk_tier] || '#00d4aa'})`,
+                transition: 'width 0.8s ease',
+              }}/>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+              <span style={{ fontSize: 9, color: '#6b7280' }}>Low Risk (0)</span>
+              <span style={{ fontSize: 9, color: '#6b7280' }}>High Risk (100)</span>
+            </div>
+          </div>
+
+          {/* Recommendation + confidence */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            <div style={{
+              flex: 1, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px',
+              border: `1px solid ${REC_COLOR[aiScore.recommendation] || '#374151'}33`,
+            }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>AI Recommendation</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: REC_COLOR[aiScore.recommendation] || '#e2e8f0' }}>
+                {aiScore.recommendation}
+              </div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>Confidence</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>
+                {((aiScore.confidence ?? 0) * 100).toFixed(0)}%
+              </div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>Risk Tier</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: RISK_COLOR[aiScore.risk_tier] || '#e2e8f0' }}>
+                {aiScore.risk_tier}
+              </div>
+            </div>
+          </div>
+
+          {/* Concerns & positives */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            {aiScore.primary_concerns?.length > 0 && (
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: '#f87171', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  ⚠ Primary Concerns
+                </div>
+                {aiScore.primary_concerns.map((c: string, i: number) => (
+                  <div key={i} style={{
+                    fontSize: 11, color: '#fca5a5', padding: '4px 8px', marginBottom: 4,
+                    background: 'rgba(239,68,68,0.08)', borderRadius: 5,
+                    borderLeft: '2px solid rgba(239,68,68,0.4)',
+                  }}>{c}</div>
+                ))}
+              </div>
+            )}
+            {aiScore.positive_factors?.length > 0 && (
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: '#4ade80', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  ✓ Positive Factors
+                </div>
+                {aiScore.positive_factors.map((f: string, i: number) => (
+                  <div key={i} style={{
+                    fontSize: 11, color: '#86efac', padding: '4px 8px', marginBottom: 4,
+                    background: 'rgba(34,197,94,0.08)', borderRadius: 5,
+                    borderLeft: '2px solid rgba(34,197,94,0.4)',
+                  }}>{f}</div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Narrative */}
+          {aiScore.narrative && (
+            <div style={{
+              background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px',
+              border: '1px solid rgba(255,255,255,0.06)', marginBottom: aiScore.loading_suggestion ? 10 : 0,
+            }}>
+              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                AI Narrative
+              </div>
+              <div style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7 }}>{aiScore.narrative}</div>
+            </div>
+          )}
+
+          {/* Loading suggestion */}
+          {aiScore.loading_suggestion && aiScore.recommendation !== 'DECLINE' && (
+            <div style={{
+              marginTop: 10, padding: '8px 12px',
+              background: 'rgba(245,158,11,0.08)', borderRadius: 7,
+              border: '1px solid rgba(245,158,11,0.2)',
+              fontSize: 11, color: '#fcd34d',
+            }}>
+              💡 <strong>Loading Suggestion:</strong> {aiScore.loading_suggestion}
+            </div>
+          )}
+
+          {/* Audit note */}
+          <div style={{ marginTop: 10, fontSize: 10, color: '#374151', textAlign: 'right' }}>
+            AI assessment logged to audit trail · Human decision takes precedence
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function DecisionCard({ result, loading, appRef }: {
   result: UWDecision | null; loading: boolean; appRef: string
 }) {
@@ -443,6 +596,7 @@ function DecisionCard({ result, loading, appRef }: {
         borderRadius: 12, padding: '0 16px', marginBottom: 14, flexShrink: 0 }}>
         <SectionLabel>Reference</SectionLabel>
         {result.application_id && <DataRow label="Application ID" value={result.application_id} mono />}
+        {result.case_number && <DataRow label="Case Number" value={result.case_number} mono />}
         {result.case_id && <DataRow label="Case ID" value={result.case_id} mono />}
         {result.decision_id && <DataRow label="Decision ID" value={result.decision_id} mono />}
         {result.rules_version && <DataRow label="Rules Version" value={result.rules_version} mono />}
@@ -534,6 +688,7 @@ function DecisionCard({ result, loading, appRef }: {
 
       {/* Download report button */}
       {result && (
+        <>
         <Button
           icon={<DownloadOutlined />}
           onClick={() => {
@@ -576,6 +731,42 @@ function DecisionCard({ result, loading, appRef }: {
         >
           Download Decision Report
         </Button>
+        <Button
+          onClick={() => {
+              const outcome = result.outcome || ''
+              const tplMap: Record<string,string> = {
+                'APPROVED_STP': 'TPL-APPROVED-001',
+                'APPROVED':     'TPL-APPROVED-001',
+                'DECLINED':     'TPL-DECLINED-001',
+                'REFERRED':     'TPL-REFERRED-001',
+              }
+              const tplId = tplMap[outcome] || 'TPL-APPROVED-001'
+              const params = new URLSearchParams({
+                applicant_ref:  result.application_id || '',
+                product_code:   result.product_code || '',
+                face_amount:    String(result.face_amount || 0),
+                premium:        String(result.approved_premium || 0),
+                risk_class:     result.risk_class || '',
+                outcome:        outcome,
+                case_number:    result.case_number || '',
+              })
+              const token = localStorage.getItem('riskuw_token')
+              fetch(`/system/letter-templates/${tplId}/generate?${params}`, {
+                headers: { Authorization: `Bearer ${token}` }
+              }).then(r => r.blob()).then(blob => {
+                const url = URL.createObjectURL(blob)
+                window.open(url, '_blank')
+              })
+            }}
+            style={{
+              width: '100%', marginBottom: 8,
+              borderColor: 'rgba(59,130,246,0.3)', color: '#60a5fa',
+              background: 'rgba(59,130,246,0.05)',
+            }}
+          >
+            📄 Generate Decision Letter
+          </Button>
+        </>
       )}
     </div>
   )
@@ -614,7 +805,7 @@ export default function EvaluatePage() {
   }[]>([])
 
   // AI Assist state
-  const [aiEngine, setAiEngine]     = useState('xgboost')
+  const [aiEngine, setAiEngine]     = useState('claude')
   const [aiResult, setAiResult]     = useState<any>(null)
   const [aiLoading, setAiLoading]   = useState(false)
   const [lastPayload, setLastPayload] = useState<any>(null)
@@ -631,6 +822,8 @@ export default function EvaluatePage() {
 
   // Watched form values for conditional rendering
   const tobacco    = Form.useWatch('tobacco_status', form) ?? 'NEVER'
+  const [icd10Codes, setIcd10Codes] = useState<any[]>([])
+  const [icd10Debits, setIcd10Debits] = useState(0)
   const diabetes   = Form.useWatch('diabetes_type', form) ?? 'NONE'
   const cardiac    = Form.useWatch('heart_condition', form) ?? 'NONE'
   const useBuild   = Form.useWatch('use_build', form) ?? true
@@ -700,6 +893,15 @@ export default function EvaluatePage() {
 
     const payload: EvaluatePayload = {
       applicant_ref:    v.applicant_ref ?? 'APP-001',
+      premium_mode:     v.premium_mode ?? 'ANNUAL',
+      first_name:       v.first_name ?? '',
+      middle_name:      v.middle_name ?? '',
+      last_name:        v.last_name ?? '',
+      email:            v.email ?? '',
+      mobile:           v.mobile ?? '',
+      address_line1:    v.address_line1 ?? '',
+      city:             v.city ?? '',
+      pincode:          v.pincode ?? '',
       age:              v.age,
       gender:           v.gender,
       state:            v.state,
@@ -714,6 +916,8 @@ export default function EvaluatePage() {
       heart_condition:  v.heart_condition ?? 'NONE',
       heart_event_years_ago: cardiac !== 'NONE' ? v.heart_yrs : null,
       diabetes_type:    v.diabetes_type ?? 'NONE',
+      icd10_codes:      icd10Codes.map((c: any) => c.code),
+      extra_debit_points: icd10Debits,
       diabetes_dx_age:  diabetes !== 'NONE' ? v.diabetes_dx_age : null,
       a1c:              diabetes !== 'NONE' ? v.a1c : null,
       hiv_positive:     v.hiv_positive ?? false,
@@ -808,6 +1012,12 @@ export default function EvaluatePage() {
       const res = await uwAPI.evaluate(payload)
       setResult(res.data)
       setLastPayload((p: any) => ({ ...p, uw_outcome: res.data?.outcome || '', net_debit_points: res.data?.net_debit_points || 0 }))
+      // Fetch AI assessment in background
+      setAiLoading(true)
+      setAiResult(null)
+      uwAPI.aiScore({ ...payload, engine: 'xgboost' }).then((r: any) => {
+        setAiResult(r.data)
+      }).catch(() => {}).finally(() => setAiLoading(false))
       // Accumulate for Session Analytics
       setSessionCases(prev => [...prev, {
         Ref:     payload.applicant_ref ?? appRef,
@@ -843,7 +1053,7 @@ export default function EvaluatePage() {
       children: (
         <div style={{
           display: 'flex', height: 'calc(100vh - 108px)',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}>
       {/* ── Left: Form ── */}
       <div style={{
@@ -925,7 +1135,28 @@ export default function EvaluatePage() {
           )}
         </div>
 
-        {/* Main form */}
+        {/* Document Upload Panel */}
+        <DocumentUploadPanel onExtracted={(fields) => {
+          const formFields: Record<string, any> = {}
+          if (fields.age !== undefined)              formFields.age = fields.age
+          if (fields.gender)                         formFields.gender = fields.gender
+          if (fields.state)                          formFields.state = fields.state
+          if (fields.face_amount !== undefined)      formFields.face_amount = fields.face_amount
+          if (fields.coverage_term_yrs !== undefined) formFields.term_yrs = fields.coverage_term_yrs
+          if (fields.tobacco_status)                 formFields.tobacco_status = fields.tobacco_status
+          if (fields.height_inches !== undefined)    formFields.height_inches = fields.height_inches
+          if (fields.weight_lbs !== undefined)       formFields.weight_lbs = fields.weight_lbs
+          if (fields.systolic_bp !== undefined)      formFields.systolic_bp = fields.systolic_bp
+          if (fields.diastolic_bp !== undefined)     formFields.diastolic_bp = fields.diastolic_bp
+          if (fields.diabetes_type)                  formFields.diabetes_type = fields.diabetes_type
+          if (fields.heart_condition)                formFields.heart_condition = fields.heart_condition
+          if (fields.annual_income !== undefined)    formFields.annual_income = fields.annual_income
+          if (fields.existing_coverage !== undefined) formFields.existing_coverage = fields.existing_coverage
+          if (fields.applicant_ref)                  formFields.applicant_ref = fields.applicant_ref
+          if (fields.product_code)                   formFields.product_code = fields.product_code
+          form.setFieldsValue(formFields)
+        }}/>
+
         <Form
           form={form}
           layout="vertical"
@@ -987,6 +1218,43 @@ export default function EvaluatePage() {
             </Form.Item>
           </div>
 
+          {/* ── APPLICANT NAME ── */}
+          <SectionLabel>Applicant Name</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="first_name" label="First Name" rules={[{ required: true, message: 'First name required' }]}>
+              <Input placeholder="e.g. Rahul" />
+            </Form.Item>
+            <Form.Item name="middle_name" label="Middle Name">
+              <Input placeholder="Optional" />
+            </Form.Item>
+            <Form.Item name="last_name" label="Last Name" rules={[{ required: true, message: 'Last name required' }]}>
+              <Input placeholder="e.g. Sharma" />
+            </Form.Item>
+          </div>
+
+          {/* ── CONTACT DETAILS ── */}
+          <SectionLabel>Contact Details</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+            <Form.Item name="email" label="Email" rules={[{ type: 'email', message: 'Enter valid email' }]}
+              style={{ gridColumn: 'span 2' }}>
+              <Input placeholder="applicant@email.com" />
+            </Form.Item>
+            <Form.Item name="mobile" label="Mobile">
+              <Input placeholder="+91 98765 43210" />
+            </Form.Item>
+            <Form.Item name="pincode" label="Pincode">
+              <Input placeholder="400001" />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="address_line1" label="Address Line 1">
+              <Input placeholder="House/Flat No., Street" />
+            </Form.Item>
+            <Form.Item name="city" label="City">
+              <Input placeholder="Mumbai" />
+            </Form.Item>
+          </div>
+
           {/* ── COVERAGE ── */}
           <SectionLabel>Coverage</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
@@ -1002,6 +1270,14 @@ export default function EvaluatePage() {
                 parser={(v: any) => Number(v!.replace(/₹\s?|(,*)/g, '')) as any}
                 style={{ width: '100%' }}
               />
+            </Form.Item>
+            <Form.Item name="premium_mode" label="Premium Mode" help="Payment frequency for premium collection">
+              <Select placeholder="Select mode…" defaultValue="ANNUAL">
+                <Option value="ANNUAL">Annual</Option>
+                <Option value="HALF_YEARLY">Half Yearly</Option>
+                <Option value="QUARTERLY">Quarterly</Option>
+                <Option value="MONTHLY">Monthly</Option>
+              </Select>
             </Form.Item>
             <Form.Item name="term_yrs" label="Term (years)" help="Policy duration in years">
               {terms.length > 0 ? (
@@ -1090,6 +1366,16 @@ export default function EvaluatePage() {
               )}
 
               {/* ── DIABETES ── */}
+              <SectionLabel>ICD-10 Diagnosis Codes</SectionLabel>
+              <Icd10Lookup onChange={(codes, debits) => {
+                setIcd10Codes(codes)
+                setIcd10Debits(debits)
+              }}/>
+              {icd10Debits > 0 && (
+                <div style={{ fontSize:12, color:'#f87171', marginBottom:12 }}>
+                  ⚠️ ICD-10 codes add <strong>+{icd10Debits} debit points</strong> to this evaluation
+                </div>
+              )}
               <SectionLabel>Diabetes</SectionLabel>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
                 <Form.Item name="diabetes_type" label="Type">
@@ -1332,8 +1618,9 @@ export default function EvaluatePage() {
             </span>
           )}
         </div>
-        <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <DecisionCard result={result} loading={submitting} appRef={appRef} />
+          <AIAssessmentPanel aiScore={aiResult} loading={aiLoading} />
         </div>
 
         {/* ── AI Assist Panel ── */}
@@ -1345,14 +1632,13 @@ export default function EvaluatePage() {
             borderRadius: 12, padding: '16px 18px',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 16 }}>🤖</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#00d4aa' }}>AI Risk Assessment</span>
-              <span style={{ fontSize: 11, color: '#4b5563', marginLeft: 4 }}>Independent AI opinion</span>
+              <span style={{ fontSize: 16 }}>🧠</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#00d4aa' }}>LLM Second Opinion</span>
+              <span style={{ fontSize: 11, color: '#4b5563', marginLeft: 4 }}>Claude AI · Ollama · on-demand</span>
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <Select value={aiEngine} onChange={setAiEngine} size="small" style={{ flex: 1 }}>
-                <Option value="xgboost">⚡ XGBoost ML (Fast, local)</Option>
                 <Option value="claude">🧠 Claude AI (Anthropic)</Option>
                 <Option value="ollama">🦙 Ollama LLM (Local)</Option>
               </Select>
@@ -1387,7 +1673,7 @@ export default function EvaluatePage() {
             {aiLoading && (
               <div style={{ textAlign: 'center', padding: '12px 0', color: '#6b7280', fontSize: 12 }}>
                 <Spin size="small" style={{ marginRight: 8 }}/>
-                {aiEngine === 'xgboost' ? 'Running ML model...' : aiEngine === 'claude' ? 'Asking Claude AI...' : 'Querying Ollama LLM...'}
+                {aiEngine === 'claude' ? 'Asking Claude AI...' : 'Querying Ollama LLM...'}
               </div>
             )}
 
@@ -1486,3 +1772,4 @@ export default function EvaluatePage() {
     </div>
   )
 }
+

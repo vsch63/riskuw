@@ -981,6 +981,72 @@ def push_to_pas(current: CurrentUser):
         for row in records:
             rec = dict(zip(cols, row)) if not hasattr(row, "keys") else dict(row)
             rid = rec.pop("id")
+
+            # ── Enrich with multi-benefit data if proposal exists ─────────────
+            try:
+                cur2 = conn.cursor()
+                cur2.execute("""
+                    SELECT p.proposal_ref, p.overall_status, p.total_annual_premium,
+                           pb.benefit_type, pb.product_code, pb.face_amount,
+                           pb.outcome, pb.risk_class, pb.net_debit_points,
+                           pb.annual_premium, pb.exclusions, pb.linked_decline
+                    FROM proposal p
+                    JOIN proposal_benefit pb ON pb.proposal_id = p.id
+                    WHERE p.applicant_ref = %s
+                    ORDER BY p.created_at DESC, pb.benefit_type
+                    LIMIT 20
+                """, (rec.get("applicant_ref",""),))
+                benefit_rows = cur2.fetchall()
+                cur2.close()
+                if benefit_rows:
+                    bcols = ["proposal_ref","overall_status","total_annual_premium",
+                             "benefit_type","product_code","face_amount","outcome",
+                             "risk_class","net_debit_points","annual_premium",
+                             "exclusions","linked_decline"]
+                    benefits = []
+                    proposal_ref    = None
+                    overall_status  = None
+                    total_premium   = None
+                    for br in benefit_rows:
+                        bd = dict(zip(bcols, br)) if not hasattr(br,"keys") else dict(br)
+                        proposal_ref   = bd.get("proposal_ref")
+                        overall_status = bd.get("overall_status")
+                        total_premium  = bd.get("total_annual_premium")
+                        benefits.append({
+                            "benefit_type":     bd.get("benefit_type"),
+                            "product_code":     bd.get("product_code"),
+                            "face_amount":      float(bd["face_amount"]) if bd.get("face_amount") else None,
+                            "outcome":          bd.get("outcome"),
+                            "risk_class":       bd.get("risk_class"),
+                            "net_debit_points": bd.get("net_debit_points"),
+                            "annual_premium":   float(bd["annual_premium"]) if bd.get("annual_premium") else None,
+                            "exclusions":       bd.get("exclusions"),
+                            "linked_decline":   bd.get("linked_decline", False),
+                        })
+                    rec["proposal_ref"]        = proposal_ref
+                    rec["overall_status"]      = overall_status
+                    rec["total_annual_premium"] = float(total_premium) if total_premium else None
+                    rec["benefits"]            = benefits
+                    rec["is_multi_benefit"]    = True
+                else:
+                    rec["benefits"]         = [{
+                        "benefit_type":     "BASE",
+                        "product_code":     rec.get("product_code"),
+                        "face_amount":      float(rec["face_amount"]) if rec.get("face_amount") else None,
+                        "outcome":          rec.get("outcome"),
+                        "risk_class":       rec.get("risk_class"),
+                        "net_debit_points": rec.get("net_debit_points"),
+                        "annual_premium":   float(rec["approved_premium"]) if rec.get("approved_premium") else None,
+                        "exclusions":       None,
+                        "linked_decline":   False,
+                    }]
+                    rec["is_multi_benefit"] = False
+            except Exception as be:
+                import logging
+                logging.getLogger("uw_platform").warning(f"Benefit enrichment failed: {be}")
+                rec["benefits"] = []
+                rec["is_multi_benefit"] = False
+
             # Apply field mapping
             mapped = {field_map.get(k, k): v for k, v in rec.items()}
             payload = {envelope: mapped} if envelope else mapped

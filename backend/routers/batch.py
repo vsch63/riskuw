@@ -18,7 +18,7 @@ def download_template(
     """
     # Standard columns always present
     standard_headers = [
-        "applicant_ref", "product_code", "age", "gender", "state",
+        "proposal_ref", "benefit_type", "applicant_ref", "product_code", "age", "gender", "state",
         "face_amount", "coverage_term_yrs", "premium_mode", "tobacco_status",
         "height_inches", "weight_lbs", "systolic_bp", "diastolic_bp",
         "diabetes_type", "heart_condition", "annual_income", "existing_coverage",
@@ -26,6 +26,8 @@ def download_template(
 
     # Sample row values
     sample_row = {
+        "proposal_ref":     "",
+        "benefit_type":     "BASE",
         "applicant_ref":    "APP-001",
         "product_code":     product_code,
         "premium_mode":     "ANNUAL",
@@ -47,7 +49,7 @@ def download_template(
 
     # Get USER_LABEL columns from product formula
     user_label_cols = []
-    conn, release = _get_db()
+    conn, release = _jobs_db()
     try:
         import psycopg2.extras
         conn.cursor_factory = psycopg2.extras.RealDictCursor
@@ -425,9 +427,138 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
         cur.execute("DELETE FROM batch_job_records WHERE job_id = %s", (job_id,))
         conn.commit()
 
+        # ── Group rows by proposal_ref for multi-benefit processing ──────────
+        # Rows with proposal_ref + non-BASE benefit_type are rider lines
+        # Rows without proposal_ref OR with benefit_type=BASE only → single benefit
+        from collections import OrderedDict
+        proposal_groups: OrderedDict = OrderedDict()
+        single_rows = []  # (original_index, row)
+
         for i, row in enumerate(rows, 1):
+            p = {k.strip().lower(): (v.strip() if v else '') for k, v in row.items()}
+            pref = p.get("proposal_ref", "").strip()
+            btype = p.get("benefit_type", "").strip().upper()
+            if pref:
+                if pref not in proposal_groups:
+                    proposal_groups[pref] = []
+                proposal_groups[pref].append((i, p))
+            else:
+                single_rows.append((i, p))
+
+        # Separate true multi-benefit proposals from single-benefit ones
+        # (proposals with only one BASE row are treated as single-benefit)
+        multi_proposals = {}
+        for pref, prows in proposal_groups.items():
+            if len(prows) > 1:
+                multi_proposals[pref] = prows
+            else:
+                # Single row with proposal_ref — treat as single benefit
+                single_rows.append(prows[0])
+
+        # Process multi-benefit proposals first
+        for pref, prows in multi_proposals.items():
             try:
-                payload = {k.strip().lower(): v.strip() for k,v in row.items() if v is not None}
+                base_row = next((p for _, p in prows if p.get("benefit_type","").upper() == "BASE"), None)
+                if not base_row:
+                    base_row = prows[0][1]  # fallback to first row
+                row_num = prows[0][0]
+
+                # Build benefits list
+                benefits = []
+                for _, p in prows:
+                    btype = p.get("benefit_type","BASE").upper() or "BASE"
+                    pc = p.get("product_code","").upper()
+                    if pc not in valid_products:
+                        continue
+                    try:
+                        fa = float(p.get("face_amount",0) or 0)
+                        term = int(float(p.get("coverage_term_yrs",20) or 20))
+                    except:
+                        fa, term = 0, 20
+                    benefits.append({
+                        "benefit_type": btype,
+                        "product_code": pc,
+                        "face_amount": fa,
+                        "coverage_term_yrs": term,
+                        "premium_mode": base_row.get("premium_mode","ANNUAL") or "ANNUAL",
+                    })
+
+                if not benefits:
+                    errored += 1
+                    continue
+
+                # Build shared medical payload from base row
+                proposal_payload = dict(base_row)
+                proposal_payload["proposal_ref"] = pref
+                proposal_payload["benefits"] = benefits
+                # Type coercions on base row
+                for int_f in ("age","coverage_term_yrs"):
+                    if proposal_payload.get(int_f):
+                        try: proposal_payload[int_f] = int(float(proposal_payload[int_f]))
+                        except: proposal_payload.pop(int_f, None)
+                for float_f in ("face_amount","a1c","annual_income"):
+                    if proposal_payload.get(float_f):
+                        try: proposal_payload[float_f] = float(proposal_payload[float_f])
+                        except: proposal_payload.pop(float_f, None)
+                for bool_f in ("hiv_positive","cirrhosis","stroke_history","kidney_disease"):
+                    if proposal_payload.get(bool_f):
+                        proposal_payload[bool_f] = str(proposal_payload[bool_f]).lower() in ("true","1","yes")
+
+                if not dry_run:
+                    # Call evaluate_proposal logic directly
+                    from routers.underwriting import ProposalRequest, evaluate_proposal
+                    import types
+                    fake_auth = types.SimpleNamespace(
+                        username=username, role="underwriter",
+                        tenant_id="00000000-0000-0000-0000-000000000001"
+                    )
+                    try:
+                        prop_body = ProposalRequest(**proposal_payload)
+                        prop_result = evaluate_proposal(prop_body, fake_auth)
+                    except Exception as pe:
+                        _logger.warning(f"Proposal eval failed for {pref}: {pe}")
+                        errored += len(benefits)
+                        continue
+
+                    # Write one batch_job_record per benefit line
+                    for br in prop_result.get("benefits", []):
+                        b_outcome = br.get("outcome","ERROR")
+                        if "APPROVED" in b_outcome: approved += 1
+                        elif "DECLIN" in b_outcome: declined += 1
+                        elif "REFER" in b_outcome:  referred += 1
+                        else:                       errored  += 1
+
+                        cur.execute("""
+                            INSERT INTO batch_job_records
+                                (job_id, row_number, applicant_ref, product_code,
+                                 status, outcome, risk_class, net_debit_points,
+                                 primary_reason, processing_ms, created_at)
+                            VALUES (%s,%s,%s,%s,'PROCESSED',%s,%s,%s,%s,%s,now())
+                        """, (
+                            job_id, row_num,
+                            base_row.get("applicant_ref", pref),
+                            br.get("product_code",""),
+                            b_outcome,
+                            br.get("risk_class",""),
+                            br.get("net_debit_points",0),
+                            f"PROPOSAL:{pref} | BENEFIT:{br.get('benefit_type','')} | {('EXCLUSIONS:' + str(br.get('exclusions',[]))) if br.get('exclusions') else ''}",
+                            br.get("processing_ms",0),
+                        ))
+                else:
+                    # Dry run — just count as would-be approved
+                    approved += len(benefits)
+
+                conn.commit()
+            except Exception as pe:
+                _logger.warning(f"Multi-benefit proposal {pref} failed: {pe}", exc_info=True)
+                errored += 1
+                conn.rollback()
+
+        # ── Now process single-benefit rows (existing logic) ──────────────────
+        rows_to_process = single_rows
+        for i, row in rows_to_process:
+            try:
+                payload = row if isinstance(row, dict) else {k.strip().lower(): v.strip() for k,v in row.items() if v is not None}
 
                 # ── Requirement 1: Product validation ────────────────────────
                 product_code = payload.get("product_code", "").strip().upper()

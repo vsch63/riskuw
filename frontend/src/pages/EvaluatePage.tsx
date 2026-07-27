@@ -796,6 +796,13 @@ export default function EvaluatePage() {
   const [prodLoading, setProdLoading] = useState(true)
   const [result, setResult] = useState<UWDecision | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [evalMode, setEvalMode] = useState<'single'|'multi'>('single')
+  // Multi-benefit proposal state
+  const [proposalResult, setProposalResult] = useState<any>(null)
+  const [multiBaseCode, setMultiBaseCode] = useState<string>('')
+  const [multiFaceAmount, setMultiFaceAmount] = useState<number>(1000000)
+  const [multiTermYrs, setMultiTermYrs] = useState<number>(20)
+  const [riderLines, setRiderLines] = useState<any[]>([])
   const [appRef, setAppRef] = useState('APP-001')
   const [sessionCases, setSessionCases] = useState<any[]>([])
   const [activeTab, setActiveTab] = useState('evaluate')
@@ -1075,22 +1082,141 @@ export default function EvaluatePage() {
               Evaluate Application
             </h1>
             <p style={{ color: 'var(--slate-500)', fontSize: 13, marginTop: 4, marginBottom: 0 }}>
-              Single application underwriting · Real-time decision
+              {evalMode === 'single' ? 'Single benefit · Real-time decision' : 'Base plan + riders · Single underwriting call'}
             </p>
           </div>
-          <Button
-            icon={<ReloadOutlined />}
-            size="small"
-            onClick={loadProducts}
-            loading={prodLoading}
-            style={{ borderColor: 'rgba(255,255,255,0.12)', color: 'var(--slate-400)' }}
-          >
-            Reload products
-          </Button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 3 }}>
+              <button onClick={() => { setEvalMode('single'); setProposalResult(null); }}
+                style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, transition: 'all 0.2s',
+                  background: evalMode === 'single' ? '#0f766e' : 'transparent',
+                  color: evalMode === 'single' ? '#fff' : '#6b7280' }}>
+                Single
+              </button>
+              <button onClick={() => { setEvalMode('multi'); setResult(null); setAiResult(null); }}
+                style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, transition: 'all 0.2s',
+                  background: evalMode === 'multi' ? '#0f766e' : 'transparent',
+                  color: evalMode === 'multi' ? '#fff' : '#6b7280' }}>
+                Multi-Benefit
+              </button>
+            </div>
+            <Button
+              icon={<ReloadOutlined />}
+              size="small"
+              onClick={loadProducts}
+              loading={prodLoading}
+              style={{ borderColor: 'rgba(255,255,255,0.12)', color: 'var(--slate-400)' }}
+            >
+              Reload
+            </Button>
+          </div>
         </div>
 
-        {/* Product selector */}
-        <div style={{
+        {/* Multi-benefit: base plan + riders — shown at TOP when in multi mode */}
+        {evalMode === 'multi' && (
+          <div style={{ marginBottom: 20 }}>
+            {/* Base plan selector */}
+            <div style={{ background: 'rgba(0,212,170,0.05)', border: '1px solid rgba(0,212,170,0.2)',
+              borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#00d4aa',
+                textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                Base Plan
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>Product</div>
+                  <select value={multiBaseCode} onChange={e => setMultiBaseCode(e.target.value)}
+                    style={{ width: '100%', background: '#1e293b', color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.15)', borderRadius: 7,
+                      padding: '8px 10px', fontSize: 13 }}>
+                    <option value="">Select base plan...</option>
+                    {productList.filter(p => p.product_type !== 'rider' && p.category !== 'RIDER').map(p => (
+                      <option key={p.product_code} value={p.product_code}>
+                        {p.product_code} — {p.name || p.product_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>Sum Assured (₹)</div>
+                  <input type="number" value={multiFaceAmount}
+                    onChange={e => setMultiFaceAmount(Number(e.target.value))}
+                    style={{ width: '100%', background: '#1e293b', color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.15)', borderRadius: 7,
+                      padding: '8px 10px', fontSize: 13 }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>Term (Years)</div>
+                  <input type="number" value={multiTermYrs}
+                    onChange={e => setMultiTermYrs(Number(e.target.value))}
+                    style={{ width: '100%', background: '#1e293b', color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.15)', borderRadius: 7,
+                      padding: '8px 10px', fontSize: 13 }} />
+                </div>
+              </div>
+            </div>
+
+            {/* Riders */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af',
+                  textTransform: 'uppercase', letterSpacing: '0.08em' }}>Riders</div>
+                <Button size="small" type="dashed"
+                  onClick={() => setRiderLines([...riderLines,
+                    { product_code: '', benefit_type: 'RIDER_ADB', face_amount: 500000, coverage_term_yrs: 20 }])}>
+                  + Add Rider
+                </Button>
+              </div>
+              {riderLines.length === 0 && (
+                <div style={{ fontSize: 12, color: '#4b5563', textAlign: 'center', padding: '10px 0' }}>
+                  No riders added. Click + Add Rider to attach CI, ADB, WOP or ATPD.
+                </div>
+              )}
+              {riderLines.map((r, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto',
+                  gap: 8, marginBottom: 8, alignItems: 'end' }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 3 }}>Rider Product</div>
+                    <select value={r.product_code}
+                      onChange={e => { const l=[...riderLines]; l[i]={...l[i],product_code:e.target.value}; setRiderLines(l); }}
+                      style={{ width: '100%', background: '#1e293b', color: '#fff',
+                        border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
+                      <option value="">Select rider...</option>
+                      {productList.filter(p => p.product_type === 'rider' || p.category === 'RIDER').map(p => (
+                        <option key={p.product_code} value={p.product_code}>{p.product_code}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 3 }}>Type</div>
+                    <select value={r.benefit_type}
+                      onChange={e => { const l=[...riderLines]; l[i]={...l[i],benefit_type:e.target.value}; setRiderLines(l); }}
+                      style={{ width: '100%', background: '#1e293b', color: '#fff',
+                        border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
+                      <option value="RIDER_CI">CI</option>
+                      <option value="RIDER_ADB">ADB</option>
+                      <option value="RIDER_WOP">WOP</option>
+                      <option value="RIDER_ATPD">ATPD</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 3 }}>Sum Assured</div>
+                    <input type="number" value={r.face_amount} placeholder="SA"
+                      onChange={e => { const l=[...riderLines]; l[i]={...l[i],face_amount:Number(e.target.value)}; setRiderLines(l); }}
+                      style={{ width: '100%', background: '#1e293b', color: '#fff',
+                        border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }} />
+                  </div>
+                  <Button size="small" danger
+                    onClick={() => setRiderLines(riderLines.filter((_,j)=>j!==i))}>✕</Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Product selector — shown only in single mode */}
+        {evalMode === 'single' && <div style={{
           background: 'rgba(255,255,255,0.03)',
           border: '1px solid rgba(255,255,255,0.08)',
           borderRadius: 12, padding: '16px 18px', marginBottom: 20,
@@ -1576,28 +1702,82 @@ export default function EvaluatePage() {
 
           {/* Submit */}
           <Divider />
-          <Button
-            type="primary"
-            size="large"
-            block
-            loading={submitting}
-            onClick={handleSubmit}
-            icon={<ThunderboltOutlined />}
-            style={{
-              height: 52, fontSize: 16, fontWeight: 700,
-              letterSpacing: '0.02em',
-              fontFamily: 'var(--font-display)',
-            }}
-          >
-            Run Underwriting Evaluation
-          </Button>
-          <div style={{
-            textAlign: 'center', marginTop: 10,
-            fontSize: 11, color: 'var(--slate-600)',
-            fontFamily: 'var(--font-mono)',
-          }}>
-            POST /underwriting/evaluate · instant decision
-          </div>
+
+          {/* Mode-aware submit button */}
+          {evalMode === 'single' ? (
+            <>
+              <Button type="primary" size="large" block loading={submitting}
+                onClick={handleSubmit} icon={<ThunderboltOutlined />}
+                style={{ height: 52, fontSize: 16, fontWeight: 700,
+                  letterSpacing: '0.02em', fontFamily: 'var(--font-display)' }}>
+                Run Underwriting Evaluation
+              </Button>
+              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11,
+                color: 'var(--slate-600)', fontFamily: 'var(--font-mono)' }}>
+                POST /underwriting/evaluate · instant decision
+              </div>
+            </>
+          ) : (
+            <>
+              <Button type="primary" size="large" block loading={submitting}
+                disabled={!multiBaseCode}
+                icon={<ThunderboltOutlined />}
+                style={{ height: 52, fontSize: 16, fontWeight: 700,
+                  letterSpacing: '0.02em', fontFamily: 'var(--font-display)',
+                  background: multiBaseCode ? '#0f766e' : undefined }}
+                onClick={async () => {
+                  if (!multiBaseCode) { message.warning('Select a base plan first'); return; }
+                  setSubmitting(true); setProposalResult(null);
+                  try {
+                    const v = form.getFieldsValue()
+                    const token = localStorage.getItem('riskuw_token')
+                    const benefits = [
+                      { benefit_type: 'BASE', product_code: multiBaseCode,
+                        face_amount: multiFaceAmount, coverage_term_yrs: multiTermYrs,
+                        is_base_plan: true, benefit_label: multiBaseCode,
+                        premium_mode: v.premium_mode || 'ANNUAL' },
+                      ...riderLines.filter(r => r.product_code).map(r => ({
+                        benefit_type: r.benefit_type, product_code: r.product_code,
+                        face_amount: r.face_amount, coverage_term_yrs: r.coverage_term_yrs || 20,
+                        is_base_plan: false, benefit_label: r.product_code,
+                      }))
+                    ]
+                    const payload = {
+                      proposal_ref: (v.applicant_ref || 'APP') + '-PROP-' + Date.now(),
+                      applicant_ref: v.applicant_ref || 'APP-001',
+                      age: v.age, gender: v.gender, state: v.state || 'MH',
+                      annual_income: v.annual_income || 0,
+                      existing_coverage: v.existing_coverage || 0,
+                      tobacco_status: v.tobacco_status || 'NEVER',
+                      height_inches: v.height_inches, weight_lbs: v.weight_lbs,
+                      systolic_bp: v.systolic_bp, diastolic_bp: v.diastolic_bp,
+                      diabetes_type: v.diabetes_type || 'NONE',
+                      heart_condition: v.heart_condition || 'NONE',
+                      occupation_class: v.occ_class || 1,
+                      benefits,
+                    }
+                    const res = await fetch('/underwriting/evaluate-proposal', {
+                      method: 'POST',
+                      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+                      body: JSON.stringify(payload)
+                    })
+                    const data = await res.json()
+                    if (data.detail) throw new Error(Array.isArray(data.detail)
+                      ? data.detail.map((d:any) => d.msg).join(', ') : data.detail)
+                    setProposalResult(data)
+                    message.success('Proposal evaluated: ' + data.overall_status)
+                  } catch(e: any) {
+                    message.error(e.message || 'Proposal evaluation failed')
+                  } finally { setSubmitting(false) }
+                }}>
+                Run Multi-Benefit Evaluation
+              </Button>
+              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11,
+                color: 'var(--slate-600)', fontFamily: 'var(--font-mono)' }}>
+                POST /underwriting/evaluate-proposal · base plan + riders
+              </div>
+            </>
+          )}
         </Form>
       </div>
 
@@ -1619,8 +1799,147 @@ export default function EvaluatePage() {
           )}
         </div>
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          <DecisionCard result={result} loading={submitting} appRef={appRef} />
-          <AIAssessmentPanel aiScore={aiResult} loading={aiLoading} />
+          {evalMode === 'single' && (
+            <>
+              <DecisionCard result={result} loading={submitting} appRef={appRef} />
+              <AIAssessmentPanel aiScore={aiResult} loading={aiLoading} />
+            </>
+          )}
+
+          {evalMode === 'multi' && (
+            <>
+              {!proposalResult && !submitting && (
+                <div style={{ textAlign: 'center', color: 'var(--slate-500)', marginTop: 80 }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
+                  <div style={{ fontSize: 14, marginBottom: 6 }}>Multi-Benefit Proposal</div>
+                  <div style={{ fontSize: 12 }}>Select base plan and riders below, then click Run Multi-Benefit Evaluation</div>
+                </div>
+              )}
+              {submitting && (
+                <div style={{ textAlign: 'center', color: 'var(--slate-500)', marginTop: 80 }}>
+                  <Spin size="large" />
+                  <div style={{ fontSize: 13, marginTop: 16 }}>Evaluating all benefits...</div>
+                </div>
+              )}
+              {proposalResult && (
+                <div style={{ overflowY: 'auto' }}>
+                  {/* Overall status */}
+                  <div style={{
+                    background: proposalResult.overall_status === 'ALL_APPROVED' ? 'rgba(34,197,94,0.08)' :
+                      proposalResult.overall_status?.includes('PARTIAL') ? 'rgba(245,158,11,0.08)' : 'rgba(239,68,68,0.08)',
+                    border: '1px solid ' + (proposalResult.overall_status === 'ALL_APPROVED' ? 'rgba(34,197,94,0.3)' :
+                      proposalResult.overall_status?.includes('PARTIAL') ? 'rgba(245,158,11,0.3)' : 'rgba(239,68,68,0.3)'),
+                    borderRadius: 10, padding: '14px 18px', marginBottom: 14, flexShrink: 0,
+                  }}>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Proposal Outcome</div>
+                    <div style={{ fontSize: 22, fontWeight: 800,
+                      color: proposalResult.overall_status === 'ALL_APPROVED' ? '#22c55e' :
+                        proposalResult.overall_status?.includes('PARTIAL') ? '#f59e0b' : '#ef4444' }}>
+                      {proposalResult.overall_status?.replace(/_/g, ' ')}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                      Ref: {proposalResult.proposal_ref} &nbsp;·&nbsp; {proposalResult.benefit_count} benefits evaluated
+                    </div>
+                  </div>
+
+                  {/* Benefits table */}
+                  <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 10, padding: '14px 16px', marginBottom: 14, flexShrink: 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--teal-400)', textTransform: 'uppercase',
+                      letterSpacing: '0.08em', marginBottom: 10 }}>Benefit Decisions</div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                          {['Benefit', 'Outcome', 'Risk Class', 'Debits', 'Annual Premium'].map(h => (
+                            <th key={h} style={{ padding: '7px 10px', textAlign: 'left', color: '#6b7280',
+                              fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: 11 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(proposalResult.benefits || []).map((b: any, i: number) => {
+                          const color = b.outcome?.includes('APPROVED') ? '#22c55e' :
+                            b.outcome?.includes('DECLINED') ? '#ef4444' : '#f59e0b'
+                          return (
+                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                              <td style={{ padding: '8px 10px' }}>
+                                <Tag color={b.benefit_type === 'BASE' ? 'cyan' : 'blue'} style={{ fontSize: 10 }}>
+                                  {b.benefit_type?.replace('RIDER_', '')}
+                                </Tag>
+                                <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>{b.product_code}</div>
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <span style={{ color, fontWeight: 700, fontSize: 11 }}>
+                                  {b.outcome?.replace(/_/g, ' ')}
+                                </span>
+                                {b.linked_decline && (
+                                  <Tag color="error" style={{ fontSize: 9, marginLeft: 4 }}>linked</Tag>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px 10px', color: '#9ca3af', fontSize: 11 }}>{b.risk_class || '—'}</td>
+                              <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 11,
+                                color: (b.net_debit_points || 0) > 150 ? '#f87171' : '#9ca3af' }}>
+                                {b.net_debit_points ?? 0}
+                              </td>
+                              <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', color: '#00d4aa', fontWeight: 600 }}>
+                                {b.annual_premium
+                                  ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(b.annual_premium)
+                                  : '—'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: 'rgba(0,212,170,0.05)', borderTop: '2px solid rgba(0,212,170,0.2)' }}>
+                          <td colSpan={4} style={{ padding: '8px 10px', fontWeight: 700, color: '#e2e8f0', fontSize: 13 }}>
+                            Total Annual Premium
+                          </td>
+                          <td style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontWeight: 700,
+                            color: '#00d4aa', fontSize: 15 }}>
+                            {proposalResult.total_annual_premium
+                              ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(proposalResult.total_annual_premium)
+                              : '—'}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* Frequency breakdown */}
+                  {(proposalResult.total_annual_premium || 0) > 0 && (
+                    <div style={{ background: 'rgba(0,212,170,0.04)', borderRadius: 10, padding: '14px 16px',
+                      border: '1px solid rgba(0,212,170,0.15)', marginBottom: 14, flexShrink: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#00d4aa', textTransform: 'uppercase',
+                        letterSpacing: '0.08em', marginBottom: 10 }}>
+                        Premium by Payment Frequency
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
+                        {[
+                          { label: 'Annual',      value: proposalResult.total_annual_premium,       note: 'Best value' },
+                          { label: 'Half-Yearly', value: proposalResult.total_annual_premium / 2,   note: 'x2 / year' },
+                          { label: 'Quarterly',   value: proposalResult.total_annual_premium / 4,   note: 'x4 / year' },
+                          { label: 'Monthly',     value: proposalResult.total_annual_premium / 12,  note: 'x12 / year' },
+                        ].map(({ label, value, note }) => (
+                          <div key={label} style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 8,
+                            padding: '10px 12px', textAlign: 'center' }}>
+                            <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>{label}</div>
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: '#00d4aa' }}>
+                              {new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Math.round(value))}
+                            </div>
+                            <div style={{ fontSize: 9, color: '#4b5563', marginTop: 2 }}>{note}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 10, color: '#4b5563', textAlign: 'right' }}>
+                        * Approximate. GST and exact loading may vary by payment mode.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* ── AI Assist Panel ── */}
@@ -1756,12 +2075,12 @@ export default function EvaluatePage() {
   ]
 
   return (
-    <div style={{ height: 'calc(100vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: 'calc(100vh - 56px)', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
         items={workbenchTabs}
-        style={{ flex: 1, overflow: 'hidden' }}
+        style={{ flex: 1, overflow: 'auto' }}
         tabBarStyle={{
           padding: '0 32px',
           borderBottom: '1px solid rgba(255,255,255,0.07)',
