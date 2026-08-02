@@ -1120,7 +1120,7 @@ export default function EvaluatePage() {
               borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#00d4aa',
                 textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
-                Base Plan
+                Primary Benefit (Base Plan)
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10 }}>
                 <div>
@@ -1161,16 +1161,16 @@ export default function EvaluatePage() {
               borderRadius: 10, padding: '14px 16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af',
-                  textTransform: 'uppercase', letterSpacing: '0.08em' }}>Riders</div>
+                  textTransform: 'uppercase', letterSpacing: '0.08em' }}>Additional Benefits / Riders</div>
                 <Button size="small" type="dashed"
                   onClick={() => setRiderLines([...riderLines,
                     { product_code: '', benefit_type: 'RIDER_ADB', face_amount: 500000, coverage_term_yrs: 20 }])}>
-                  + Add Rider
+                  + Add Benefit / Rider
                 </Button>
               </div>
               {riderLines.length === 0 && (
                 <div style={{ fontSize: 12, color: '#4b5563', textAlign: 'center', padding: '10px 0' }}>
-                  No riders added. Click + Add Rider to attach CI, ADB, WOP or ATPD.
+                  No additional benefits added. Click + Add Benefit / Rider to add a rider or a second base plan (e.g. Endowment, PA).
                 </div>
               )}
               {riderLines.map((r, i) => (
@@ -1183,8 +1183,11 @@ export default function EvaluatePage() {
                       style={{ width: '100%', background: '#1e293b', color: '#fff',
                         border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
                       <option value="">Select rider...</option>
-                      {productList.filter(p => p.product_type === 'rider' || p.category === 'RIDER').map(p => (
-                        <option key={p.product_code} value={p.product_code}>{p.product_code}</option>
+                      {productList.map(p => (
+                        <option key={p.product_code} value={p.product_code}>
+                          {p.product_code} — {p.name || p.product_name}
+                          {(p.product_type === 'rider' || p.category === 'RIDER') ? ' (Rider)' : ' (Base)'}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -1194,10 +1197,18 @@ export default function EvaluatePage() {
                       onChange={e => { const l=[...riderLines]; l[i]={...l[i],benefit_type:e.target.value}; setRiderLines(l); }}
                       style={{ width: '100%', background: '#1e293b', color: '#fff',
                         border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
-                      <option value="RIDER_CI">CI</option>
-                      <option value="RIDER_ADB">ADB</option>
-                      <option value="RIDER_WOP">WOP</option>
-                      <option value="RIDER_ATPD">ATPD</option>
+                      <optgroup label="Base Plans">
+                        <option value="BASE">Base Plan</option>
+                        <option value="BASE_ENDOW">Endowment</option>
+                        <option value="BASE_WHOLELIFE">Whole Life</option>
+                        <option value="BASE_PA">Personal Accident</option>
+                      </optgroup>
+                      <optgroup label="Riders">
+                        <option value="RIDER_CI">Critical Illness</option>
+                        <option value="RIDER_ADB">Accidental Death</option>
+                        <option value="RIDER_WOP">Waiver of Premium</option>
+                        <option value="RIDER_ATPD">ATPD</option>
+                      </optgroup>
                     </select>
                   </div>
                   <div>
@@ -1216,7 +1227,8 @@ export default function EvaluatePage() {
         )}
 
         {/* Product selector — shown only in single mode */}
-        {evalMode === 'single' && <div style={{
+        {evalMode === 'single' && (
+        <div style={{
           background: 'rgba(255,255,255,0.03)',
           border: '1px solid rgba(255,255,255,0.08)',
           borderRadius: 12, padding: '16px 18px', marginBottom: 20,
@@ -1260,6 +1272,7 @@ export default function EvaluatePage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Document Upload Panel */}
         <DocumentUploadPanel onExtracted={(fields) => {
@@ -1726,7 +1739,11 @@ export default function EvaluatePage() {
                   letterSpacing: '0.02em', fontFamily: 'var(--font-display)',
                   background: multiBaseCode ? '#0f766e' : undefined }}
                 onClick={async () => {
-                  if (!multiBaseCode) { message.warning('Select a base plan first'); return; }
+                  if (!multiBaseCode) { message.warning('Select a primary benefit first'); return; }
+                  if (riderLines.filter(r => r.product_code).length === 0) {
+                    message.warning('Add at least one additional benefit or rider. Use Single mode for a single benefit evaluation.');
+                    return;
+                  }
                   setSubmitting(true); setProposalResult(null);
                   try {
                     const v = form.getFieldsValue()
@@ -1739,7 +1756,9 @@ export default function EvaluatePage() {
                       ...riderLines.filter(r => r.product_code).map(r => ({
                         benefit_type: r.benefit_type, product_code: r.product_code,
                         face_amount: r.face_amount, coverage_term_yrs: r.coverage_term_yrs || 20,
-                        is_base_plan: false, benefit_label: r.product_code,
+                        // BASE* types are independent base plans, RIDER_* are linked riders
+                        is_base_plan: r.benefit_type.startsWith('BASE'),
+                        benefit_label: r.benefit_label || r.product_code,
                       }))
                     ]
                     const payload = {
