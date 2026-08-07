@@ -127,7 +127,28 @@ export default function LoginPage() {
   const [forgotForm] = Form.useForm()
   const [resetForm] = Form.useForm()
 
+  // MFA enrollment state
+  const [enrollRequired, setEnrollRequired] = useState(false)
+  const [mfaSecret, setMfaSecret] = useState('')
+  const [mfaOtpUri, setMfaOtpUri] = useState('')
+  const [enrollPhase, setEnrollPhase] = useState<'setup' | 'verify'>('setup')
+
   useEffect(() => { setError('') }, [step])
+
+  /* ── MFA enrollment: fetch secret on mount when enrollment required ── */
+  useEffect(() => {
+    if (step !== 'mfa' || !enrollRequired || mfaSecret) return
+    ;(async () => {
+      try {
+        const res  = await authAPI.setupMFA(mfaUsername, mfaSessionToken)
+        const data = res.data
+        setMfaSecret(data.secret || '')
+        setMfaOtpUri(data.otpauth_uri || '')
+      } catch {
+        setError('Failed to initialize MFA enrollment. Please try again.')
+      }
+    })()
+  }, [step, enrollRequired])
 
   // Read token from URL on mount (for email link clicks)
   useEffect(() => {
@@ -151,6 +172,10 @@ export default function LoginPage() {
       const data = res.data
       if (data.mfa_required) {
         setMFAPending(values.username, data.mfa_session_token)
+        setEnrollRequired(!!data.mfa_enrollment_required)
+        setEnrollPhase('setup')
+        setMfaSecret('')
+        setMfaOtpUri('')
         setStep('mfa')
         return
       }
@@ -187,6 +212,29 @@ export default function LoginPage() {
       }
       setUser(user)
       message.success('Authenticated successfully')
+    } catch {
+      setError('Invalid code. Please try again.')
+    } finally {
+      setOtpLoading(false)
+    }
+  }
+
+  /* ── Step 2b: TOTP enroll (login enforcement) ── */
+  const handleEnrollOTP = async (code: string) => {
+    setOtpLoading(true); setError('')
+    try {
+      const res  = await authAPI.verifySetupMFA(mfaUsername, mfaSessionToken, code)
+      const data = res.data
+      const user: AuthUser = {
+        username:    data.username ?? mfaUsername,
+        role:        data.role ?? 'underwriter',
+        full_name:   data.full_name ?? '',
+        token:       data.access_token,
+        tenant_id:   data.tenant_id ?? '',
+        tenant_name: data.tenant_name ?? '',
+      }
+      setUser(user)
+      message.success('MFA enabled — you are signed in')
     } catch {
       setError('Invalid code. Please try again.')
     } finally {
@@ -337,21 +385,56 @@ export default function LoginPage() {
           <h2 style={{
             fontFamily: 'var(--font-display)', fontWeight: 700,
             fontSize: 26, color: '#fff', letterSpacing: '-0.02em', marginBottom: 8,
-          }}>Two-factor verification</h2>
+          }}>
+            {enrollRequired ? 'Set up authenticator' : 'Two-factor verification'}
+          </h2>
           <p style={{ color: 'var(--slate-400)', fontSize: 14, lineHeight: 1.6 }}>
-            Enter the 6-digit code from your authenticator app
+            {enrollRequired
+              ? 'Open your authenticator app and add the account using the secret below'
+              : 'Enter the 6-digit code from your authenticator app'}
           </p>
           <p style={{ marginTop: 8, fontFamily: 'var(--font-mono)', color: 'var(--teal-500)', fontSize: 13 }}>
             {mfaUsername}
           </p>
         </div>
+
+        {enrollRequired && mfaSecret && (
+          <div style={{ marginBottom: 12, padding: '14px 16px', background: 'rgba(0,212,170,0.05)',
+            border: '1px solid rgba(0,212,170,0.15)', borderRadius: 8, fontSize: 13 }}>
+            <div style={{ fontWeight: 600, color: 'var(--teal-400)', marginBottom: 4 }}>
+              Your TOTP secret
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', color: '#fff', marginBottom: 8,
+              fontSize: 14, letterSpacing: '0.05em' }}>
+              {mfaSecret}
+            </div>
+            {mfaOtpUri && (
+              <div>
+                <a href={mfaOtpUri} target="_blank" rel="noreferrer"
+                  style={{ color: 'var(--teal-400)', fontSize: 12 }}>
+                  Open in authenticator app
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
         {error && <Alert message={error} type="error" showIcon
           style={{ marginBottom: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }} />}
-        <OTPInput onComplete={handleOTP} />
-        {otpLoading && <div style={{ textAlign: 'center', color: 'var(--teal-400)', fontSize: 13 }}>Verifying…</div>}
+        <OTPInput onComplete={(code) => enrollRequired ? handleEnrollOTP(code) : handleOTP(code)} />
+        {otpLoading && <div style={{ textAlign: 'center', color: 'var(--teal-400)', fontSize: 13 }}>
+          {enrollRequired ? 'Verifying & activating…' : 'Verifying…'}
+        </div>}
         <p style={{ textAlign: 'center', marginTop: 24, fontSize: 12, color: 'var(--slate-500)' }}>
           Open Google Authenticator or Authy · codes refresh every 30s
         </p>
+        <div style={{ textAlign: 'center', marginTop: 16 }}>
+          <button type="button"
+            onClick={() => { clearMFA(); setStep('credentials'); setEnrollRequired(false); setError('') }}
+            style={{ background: 'none', border: 'none', color: 'var(--slate-400)', cursor: 'pointer', fontSize: 13 }}>
+            Use a different account
+          </button>
+        </div>
       </>
     )
 

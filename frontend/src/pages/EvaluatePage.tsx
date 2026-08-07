@@ -12,6 +12,10 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api, productsAPI, uwAPI } from '../api/client'
+
+// INR formatter for SAR breakdown (backend returns SAR values as strings).
+const inr = (v: any) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(v || 0))
 import type { Product, UWDecision, EvaluatePayload, RuleFired } from '../types'
 import { SessionAnalyticsTab, PlatformAnalyticsTab } from './WorkbenchAnalyticsTabs'
 
@@ -1860,6 +1864,74 @@ export default function EvaluatePage() {
                       Ref: {proposalResult.proposal_ref} &nbsp;·&nbsp; {proposalResult.benefit_count} benefits evaluated
                     </div>
                   </div>
+
+                  {/* SAR breakdown — Sum-at-Risk / Free Cover Limit (Phase 1/2) */}
+                  {proposalResult.sar?.configured && (
+                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+                      borderRadius: 10, padding: '14px 16px', marginBottom: 14, flexShrink: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--teal-400)',
+                        textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                        Sum-at-Risk · Free Cover Limit
+                        {(proposalResult.medical_requirements || []).length > 0 && (
+                          <span style={{ float: 'right', color: '#f59e0b', fontWeight: 600 }}>
+                            NML: {(proposalResult.medical_requirements || []).join(' · ')}
+                          </span>
+                        )}
+                      </div>
+                      {proposalResult.sar_escalation && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
+                          borderRadius: 6, marginBottom: 8, fontSize: 11,
+                          background: proposalResult.sar_escalation === 'DECLINE'
+                            ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
+                          color: proposalResult.sar_escalation === 'DECLINE' ? '#f87171' : '#fbbf24',
+                          border: `1px solid ${proposalResult.sar_escalation === 'DECLINE' ? 'rgba(239,68,68,0.35)' : 'rgba(245,158,11,0.35)'}` }}>
+                          <span style={{ fontWeight: 700 }}>⚑ Cumulative SAR escalation: {proposalResult.sar_escalation}</span>
+                          <span style={{ opacity: 0.85 }}>— based on existing policies + this proposal. See per-benefit outcome.</span>
+                        </div>
+                      )}
+                      <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ color: '#6b7280', textAlign: 'left' }}>
+                            <th style={{ padding: '4px 6px' }}>Exposure Group</th>
+                            <th style={{ padding: '4px 6px' }}>Gross SAR</th>
+                            <th style={{ padding: '4px 6px' }}>FCL Applied</th>
+                            <th style={{ padding: '4px 6px' }}>Excess SAR</th>
+                            <th style={{ padding: '4px 6px' }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.keys(proposalResult.sar.gross_sar || {}).map((eg: string) => {
+                            const covered = proposalResult.sar.auto_approve?.[eg]
+                            return (
+                              <tr key={eg} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                                <td style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)' }}>{eg}</td>
+                                <td style={{ padding: '5px 6px' }}>{inr(proposalResult.sar.gross_sar[eg])}</td>
+                                <td style={{ padding: '5px 6px' }}>{inr(proposalResult.sar.fcl_applied[eg])}</td>
+                                <td style={{ padding: '5px 6px' }}>{inr(proposalResult.sar.excess_sar[eg])}</td>
+                                <td style={{ padding: '5px 6px' }}>
+                                  {covered
+                                    ? <span style={{ color: '#22c55e' }}>✓ FCL cover</span>
+                                    : Number(proposalResult.sar.excess_sar?.[eg] || 0) > 0
+                                      ? <span style={{ color: '#f59e0b' }}>Excess → UW</span>
+                                      : <span style={{ color: '#6b7280' }}>—</span>}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                      {Object.keys(proposalResult.sar.risk_group_sar || {}).length > 0 && (
+                        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {Object.entries(proposalResult.sar.risk_group_sar).map(([rg, v]) => (
+                            <span key={rg} style={{ background: 'rgba(13,148,136,0.12)', color: '#2dd4bf',
+                              padding: '2px 8px', borderRadius: 6, fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+                              {rg}: {inr(v)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Benefits table */}
                   <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',

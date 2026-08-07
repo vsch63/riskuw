@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Avatar, Tooltip, Badge } from 'antd'
+import { Avatar, Tooltip, Badge, Popover, Spin, Empty } from 'antd'
 import {
   ThunderboltOutlined, UnorderedListOutlined, DashboardOutlined,
   LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
@@ -9,9 +9,14 @@ import {
   ExportOutlined, // <--- ADDED THIS HERE
   SolutionOutlined,
   ApiOutlined,
+  FundOutlined,
+  CalculatorOutlined,
+  MedicineBoxOutlined,
+  BellOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../context/authStore'
 import { AuditOutlined } from '@ant-design/icons'
+import { notificationsAPI } from '../api/client'
 
 const NAV_MAIN = [
   { key: '/',            icon: <DashboardOutlined />,     label: 'Dashboard' },
@@ -28,6 +33,9 @@ const NAV_CONFIG = [
   { key: '/users',          icon: <TeamOutlined />,        label: 'Users' },
   { key: '/tenants',        icon: <BankOutlined />,        label: 'Tenants' },
   { key: '/product-config', icon: <AppstoreOutlined />,    label: 'Products' },
+  { key: '/sar-config',     icon: <FundOutlined />,        label: 'SAR Config' },
+  { key: '/medical-standards', icon: <MedicineBoxOutlined />, label: 'Med Standards' },
+  { key: '/formula-engine', icon: <CalculatorOutlined />,  label: 'Formula Engine' },
   { key: '/rule-config',    icon: <FunctionOutlined />,    label: 'Rules' },
   { key: '/system-config',  icon: <SettingOutlined />,     label: 'System' },
   { key: '/output-interface', icon: <ExportOutlined/>, label: 'Output Interface' },
@@ -38,6 +46,122 @@ const NAV_CONFIG = [
 const ROLE_COLOR: Record<string,string> = {
   admin:'#c084fc', super_admin:'#c084fc', senior_underwriter:'#fbbf24',
   underwriter:'#00d4aa', api_client:'#60a5fa', readonly:'#94a3b8',
+}
+
+// ── In-app notification bell (Phase 3d) ───────────────────────────────────────
+const EVENT_COLOR: Record<string,string> = {
+  SLA_BREACH: '#ef4444', ASSIGNMENT: '#00d4aa', REQUIREMENT: '#fbbf24',
+  NOTE: '#60a5fa', DECISION: '#c084fc',
+}
+
+function timeAgo(iso: string): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  const m = Math.floor(ms / 60000)
+  if (m < 1) return 'now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function NotificationBell({ navigate }: { navigate: (p: string) => void }) {
+  const [count, setCount] = useState(0)
+  const [items, setItems] = useState<any[]>([])
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const refreshAll = () => {
+    setLoading(true)
+    Promise.all([
+      notificationsAPI.unreadCount(),
+      notificationsAPI.list(false, 20),
+    ]).then(([c, l]) => {
+      setCount(c?.data?.unread ?? 0)
+      setItems(l?.data?.notifications ?? [])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    refreshAll()
+    // Poll: detect SLA breaches server-side, then refresh the badge
+    const t = setInterval(() => {
+      notificationsAPI.sync()
+        .then(d => setCount(d?.data?.unread ?? 0))
+        .catch(() => refreshAll())
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const openPop = (v: boolean) => {
+    setOpen(v)
+    if (v) refreshAll()
+  }
+
+  const clickItem = (n: any) => {
+    if (n.id) notificationsAPI.markRead(n.id).then(() => refreshAll()).catch(() => {})
+    navigate('/workbench')
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={openPop}
+      trigger="click"
+      placement="bottomRight"
+      overlayInnerStyle={{ padding: 0, background: '#0f172a', border: '1px solid rgba(255,255,255,0.08)' }}
+      content={
+        <div style={{ width: 340, background: '#0f172a', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <span style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>Notifications</span>
+            <a style={{ fontSize: 12, color: 'var(--teal-400)', cursor: 'pointer' }}
+              onClick={() => notificationsAPI.markRead().then(() => refreshAll()).catch(() => {})}>
+              Mark all read
+            </a>
+          </div>
+          <div style={{ maxHeight: 360, overflow: 'auto' }}>
+            {loading ? <div style={{ textAlign: 'center', padding: 28 }}><Spin size="small" /></div>
+              : items.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 28 }}><Empty description={<span style={{ color: '#64748b', fontSize: 12 }}>No notifications</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} /></div>
+              ) : items.map((n: any) => (
+                <div key={n.id} onClick={() => clickItem(n)} style={{
+                  display: 'flex', gap: 10, padding: '10px 14px', cursor: 'pointer',
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  background: n.is_read ? 'transparent' : 'rgba(0,212,170,0.05)',
+                }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', marginTop: 5, flexShrink: 0,
+                    background: EVENT_COLOR[n.event_type] ?? '#64748b' }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ color: '#e2e8f0', fontSize: 12.5, fontWeight: n.is_read ? 400 : 600 }}>{n.title}</span>
+                      <span style={{ color: '#64748b', fontSize: 11, flexShrink: 0 }}>{timeAgo(n.created_at)}</span>
+                    </div>
+                    {n.body && <div style={{ color: '#94a3b8', fontSize: 11.5, marginTop: 2,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.body}</div>}
+                    {n.case_ref_id && <div style={{ color: '#475569', fontSize: 10.5, fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                      case #{n.case_ref_id}
+                    </div>}
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      }
+    >
+      <Tooltip title="Notifications">
+        <Badge count={count} size="small" offset={[-2, 2]} style={{ boxShadow: 'none' }}>
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate-400)',
+            padding: '4px 6px', borderRadius: 6, display: 'flex', transition: 'color 150ms' }}
+            onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = 'var(--teal-400)')}
+            onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'var(--slate-400)')}
+          >
+            <BellOutlined style={{ fontSize: 16 }} />
+          </button>
+        </Badge>
+      </Tooltip>
+    </Popover>
+  )
 }
 
 export default function AppLayout() {
@@ -195,7 +319,8 @@ export default function AppLayout() {
           <div style={{ fontSize: 13, color: 'var(--slate-500)', fontFamily: 'var(--font-mono)' }}>
             riskuw.online
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--slate-500)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, color: 'var(--slate-500)' }}>
+            <NotificationBell navigate={navigate} />
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e',
               boxShadow: '0 0 8px rgba(34,197,94,0.6)', display: 'inline-block' }} />
             Engine online

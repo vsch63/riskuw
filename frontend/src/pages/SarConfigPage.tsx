@@ -1,0 +1,505 @@
+// ══════════════════════════════════════════════════════════════════════════
+// SarConfigPage.tsx — Sum-at-Risk configuration (SAR framework, V026)
+//
+// Manages the SAR pipeline configuration:
+//   * Benefit Master   — per-benefit SAR formula + risk-group memberships
+//   * Risk Groups      — actuarial aggregation buckets (LIFE/HEALTH/ACCIDENT)
+//   * Exposure Groups  — underwriting-treatment buckets (EMPLOYER_BASE/…)
+//   * Aggregation      — SUM/MAXIMUM per (risk_group, exposure_group, product)
+//   * FCL Config       — Free Cover Limits (FLAT or FORMULA)
+//   * NML Config       — Non-Medical Limit bands → medical requirements
+//
+// All endpoints are tenant-scoped; config changes take effect immediately.
+// ══════════════════════════════════════════════════════════════════════════
+import { useEffect, useState } from 'react'
+import {
+  Table, Button, Modal, Form, Input, Select, InputNumber, Switch,
+  message, Tag, Space, Tabs, Card, Typography, Alert,
+} from 'antd'
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import MedicalStandardsPage from './MedicalStandardsPage'
+import { sarConfigAPI } from '../api/client'
+
+const { Option } = Select
+
+const SAR_FORMULAS = ['FACE_AMOUNT', 'MORTALITY_PORTION', 'NET_AMOUNT_AT_RISK', 'PERCENTAGE', 'SUM_OF_SELECTED', 'MAXIMUM_BENEFIT']
+const PAYERS = ['ANY', 'EMPLOYER', 'EMPLOYEE', 'JOINT', 'EXCLUDE_EMPLOYER']
+const AGG_METHODS = ['SUM', 'MAXIMUM', 'WEIGHTED_SUM']
+const FCL_BASIS = ['FLAT', 'FORMULA']
+
+const card = {
+  background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: 10, padding: '14px 16px', marginBottom: 16,
+}
+const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: 11 }
+
+function PageHeader({ onReload }: { onReload: () => void }) {
+  return (
+    <Card bordered={false} style={{ background: 'transparent', marginBottom: 14, padding: '0 4px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <Typography.Title level={4} style={{ margin: 0, color: 'var(--teal-300)' }}>Sum-at-Risk Configuration</Typography.Title>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            SAR pipeline · risk groups · Free Cover Limits · Non-Medical Limits
+          </Typography.Text>
+        </div>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>Refresh</Button>
+      </div>
+    </Card>
+  )
+}
+
+// ─────────────────────────── Benefits ───────────────────────────
+function BenefitsTab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [hist, setHist] = useState<{ code: string; versions: any[] } | null>(null)
+  const [histLoading, setHistLoading] = useState(false)
+  const [form] = Form.useForm()
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const { data } = await sarConfigAPI.listBenefits()
+      setRows(data || [])
+    } catch (e: any) { message.error(e.message) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async () => {
+    const v = await form.validateFields()
+    try {
+      await sarConfigAPI.upsertBenefit(v)
+      message.success('Benefit config saved — new version created')
+      setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
+  const showHistory = async (code: string) => {
+    setHist({ code, versions: [] })
+    setHistLoading(true)
+    try {
+      const { data } = await sarConfigAPI.benefitVersions(code)
+      setHist({ code, versions: data?.versions || [] })
+    } catch (e: any) { message.error(e.message) }
+    finally { setHistLoading(false) }
+  }
+
+  const cols = [
+    { title: 'Benefit Code', dataIndex: 'benefit_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: 'Type', dataIndex: 'benefit_type', width: 100, render: (v: string) => <Tag color={v === 'BASE' ? 'geekblue' : 'purple'}>{v}</Tag> },
+    { title: 'SAR Formula', dataIndex: 'sar_formula', width: 150, render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
+    { title: 'Exposure Group', dataIndex: 'uw_exposure_group', width: 140 },
+    { title: 'Risk Group', dataIndex: 'risk_group', width: 110 },
+    { title: 'Payer', dataIndex: 'premium_payer', width: 100 },
+    { title: 'In SAR', dataIndex: 'include_in_sar', width: 70, render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>) },
+    { title: 'Seq', dataIndex: 'processing_sequence', width: 60 },
+    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: 'Effective', dataIndex: 'effective_date', width: 105, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
+    { title: 'History', key: 'hist', width: 90, render: (_: any, r: any) =>
+        <Button size="small" type="link" onClick={() => showHistory(r.benefit_code)}>History</Button> },
+  ]
+
+  return (
+    <div style={card}>
+      <Space style={{ marginBottom: 12 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>New / Edit Benefit</Button>
+      </Space>
+      <Table size="small" rowKey="benefit_code" dataSource={rows} columns={cols} loading={loading} pagination={{ pageSize: 12 }} />
+      <Modal title="Benefit SAR Config" open={open} onOk={save} onCancel={() => setOpen(false)} width={620} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ benefit_type: 'BASE', risk_type: 'MORTALITY', premium_payer: 'ANY', include_in_sar: true, sar_formula: 'FACE_AMOUNT', processing_sequence: 0, is_active: true }}>
+          <Space style={{ width: '100%' }} wrap>
+            <Form.Item name="benefit_code" label="Benefit / Product Code" rules={[{ required: true }]}><Input style={{ width: 220 }} /></Form.Item>
+            <Form.Item name="benefit_type" label="Type"><Select style={{ width: 140 }}>
+              {['BASE', 'RIDER_CI', 'RIDER_ADB', 'RIDER_ATPD', 'RIDER_WOP'].map(t => <Option key={t} value={t}>{t}</Option>)}
+            </Select></Form.Item>
+            <Form.Item name="risk_type" label="Risk Type"><Select style={{ width: 140 }}>
+              {['MORTALITY', 'MORBIDITY', 'ACCIDENT', 'HEALTH'].map(t => <Option key={t} value={t}>{t}</Option>)}
+            </Select></Form.Item>
+            <Form.Item name="uw_exposure_group" label="Exposure Group"><Select allowClear style={{ width: 160 }}>
+              {['EMPLOYER_BASE', 'VOLUNTARY_TOPUP', 'INDIVIDUAL', 'FREE_COVER', 'EXCESS_COVER', 'OPTIONAL_RIDER'].map(t => <Option key={t} value={t}>{t}</Option>)}
+            </Select></Form.Item>
+            <Form.Item name="risk_group" label="Risk Group"><Select allowClear style={{ width: 120 }}>
+              {['LIFE', 'HEALTH', 'ACCIDENT'].map(t => <Option key={t} value={t}>{t}</Option>)}
+            </Select></Form.Item>
+            <Form.Item name="premium_payer" label="Premium Payer"><Select style={{ width: 150 }}>
+              {PAYERS.map(t => <Option key={t} value={t}>{t}</Option>)}
+            </Select></Form.Item>
+            <Form.Item name="sar_formula" label="SAR Formula"><Select style={{ width: 200 }}>
+              {SAR_FORMULAS.map(t => <Option key={t} value={t}>{t}</Option>)}
+            </Select></Form.Item>
+            <Form.Item name="sar_percentage" label="SAR % (PERCENTAGE)"><InputNumber style={{ width: 120 }} /></Form.Item>
+            <Form.Item name="processing_sequence" label="Seq"><InputNumber style={{ width: 70 }} /></Form.Item>
+            <Form.Item name="include_in_sar" label="Include in SAR" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
+          </Space>
+        </Form>
+      </Modal>
+      <Modal title={`Version history — ${hist?.code ?? ''}`} open={!!hist} onCancel={() => setHist(null)} footer={null} width={640}>
+        <Table
+          size="small" rowKey="version" loading={histLoading}
+          dataSource={hist?.versions || []} pagination={false}
+          columns={[
+            { title: 'Version', dataIndex: 'version', width: 70, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+            { title: 'Current', dataIndex: 'is_current', width: 85, render: (v: boolean) => (v ? <Tag color="green">current</Tag> : <Tag>superseded</Tag>) },
+            { title: 'Effective', dataIndex: 'effective_date', width: 110, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
+            { title: 'Expiry', dataIndex: 'expiry_date', width: 110, render: (v: string) => <span style={mono}>{v || '—'}</span> },
+            { title: 'SAR Formula', dataIndex: 'sar_formula', render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
+            { title: 'Seq', dataIndex: 'processing_sequence', width: 60 },
+            { title: 'By', dataIndex: 'updated_by', width: 110 },
+            { title: 'Changed', dataIndex: 'updated_at', width: 150, render: (v: string) => <span style={mono}>{v ? v.slice(0, 16) : '—'}</span> },
+          ]}
+        />
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── Risk Groups ─────────────────────────
+function RiskGroupsTab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [form] = Form.useForm()
+  const load = async () => {
+    setLoading(true)
+    try { const { data } = await sarConfigAPI.listRiskGroups(); setRows(data || []) }
+    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  const openModal = (r?: any) => {
+    setEditing(r || null)
+    form.resetFields()
+    if (r) form.setFieldsValue(r)
+    setOpen(true)
+  }
+  const save = async () => {
+    try {
+      await sarConfigAPI.upsertRiskGroup(await form.validateFields())
+      message.success('Risk group saved'); setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+  const inr = (v?: number) => v != null ? '₹' + Number(v).toLocaleString('en-IN') : '—'
+  const cols = [
+    { title: 'Group', dataIndex: 'group_code', render: (v: string) => <Tag color="cyan" style={mono}>{v}</Tag> },
+    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: 'Name', dataIndex: 'group_name', render: (v: string, r: any) =>
+      <a onClick={() => openModal(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
+    { title: 'Aggregation', dataIndex: 'aggregation_method', width: 110, render: (v: string) => <span style={mono}>{v}</span> },
+    { title: 'Auto Refer ≥', dataIndex: 'auto_refer_threshold', width: 120, render: inr },
+    { title: 'Senior UW ≥', dataIndex: 'senior_uw_threshold', width: 120, render: inr },
+    { title: 'RI Approve ≥', dataIndex: 'ri_approval_threshold', width: 120, render: inr },
+    { title: 'Decline ≥', dataIndex: 'decline_threshold', width: 120, render: inr },
+    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+  ]
+  return (
+    <div style={card}>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => openModal()}>New Risk Group</Button>
+      <Table size="small" rowKey="group_code" dataSource={rows} columns={cols} loading={loading} pagination={false} />
+      <Modal title={editing ? `Edit Risk Group · ${editing.group_code}` : 'New Risk Group'} open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ aggregation_method: 'SUM', uw_threshold_basis: 'INDIVIDUAL', include_existing_policies: true, include_pending_proposals: true, is_active: true }}>
+          <Form.Item name="group_code" label="Group Code" rules={[{ required: true }]}><Input disabled={!!editing} /></Form.Item>
+          <Form.Item name="group_name" label="Group Name" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="aggregation_method" label="Aggregation Method"><Select>{AGG_METHODS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+          <Form.Item name="uw_threshold_basis" label="Threshold Basis"><Select>{['INDIVIDUAL', 'SCHEME'].map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
+            <Form.Item name="auto_refer_threshold" label="Auto Refer ≥"><InputNumber style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="senior_uw_threshold" label="Senior UW ≥"><InputNumber style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="ri_approval_threshold" label="RI Approval ≥"><InputNumber style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="decline_threshold" label="Decline ≥"><InputNumber style={{ width: '100%' }} /></Form.Item>
+          </div>
+          <Form.Item name="description" label="Description"><Input /></Form.Item>
+          <Form.Item name="include_existing_policies" valuePropName="checked" label="Include existing policies"><Switch /></Form.Item>
+          <Form.Item name="include_pending_proposals" valuePropName="checked" label="Include pending proposals"><Switch /></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── Exposure Groups ─────────────────────
+function ExposureGroupsTab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm()
+  const load = async () => {
+    setLoading(true)
+    try { const { data } = await sarConfigAPI.listExposureGroups(); setRows(data || []) }
+    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  const save = async () => {
+    try {
+      await sarConfigAPI.upsertExposureGroup(await form.validateFields())
+      message.success('Exposure group saved'); setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+  const cols = [
+    { title: 'Exposure', dataIndex: 'exposure_code', render: (v: string) => <Tag color="geekblue" style={mono}>{v}</Tag> },
+    { title: 'Name', dataIndex: 'exposure_name' },
+    { title: 'Description', dataIndex: 'description' },
+    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+  ]
+  return (
+    <div style={card}>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New Exposure Group</Button>
+      <Table size="small" rowKey="exposure_code" dataSource={rows} columns={cols} loading={loading} pagination={false} />
+      <Modal title="Exposure Group" open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ is_active: true }}>
+          <Form.Item name="exposure_code" label="Exposure Code" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="exposure_name" label="Exposure Name" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="description" label="Description"><Input /></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── Aggregation Rules ────────────────────
+function AggregationTab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm()
+  const load = async () => {
+    setLoading(true)
+    try { const { data } = await sarConfigAPI.listAggregationRules(); setRows(data || []) }
+    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  const save = async () => {
+    try {
+      await sarConfigAPI.createAggregationRule(await form.validateFields())
+      message.success('Aggregation rule created'); setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+  const cols = [
+    { title: 'Risk Group', dataIndex: 'risk_group_code', render: (v: string) => <Tag color="cyan">{v}</Tag> },
+    { title: 'Exposure Group', dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: 'Product', dataIndex: 'product_code', render: (v?: string) => v || <Tag>System</Tag> },
+    { title: 'Method', dataIndex: 'aggregation_method', width: 140, render: (v: string) => <span style={mono}>{v}</span> },
+  ]
+  return (
+    <div style={card}>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New Aggregation Rule</Button>
+      <Table size="small" rowKey={(r) => r.id} dataSource={rows} columns={cols} loading={loading} pagination={false} />
+      <Modal title="Aggregation Rule" open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ aggregation_method: 'SUM', is_active: true }}>
+          <Form.Item name="risk_group_code" label="Risk Group Code" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="exposure_group" label="Exposure Group (blank = any)"><Input /></Form.Item>
+          <Form.Item name="product_code" label="Product Code (blank = all products)"><Input /></Form.Item>
+          <Form.Item name="aggregation_method" label="Method"><Select>{AGG_METHODS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── FCL Config ──────────────────────────
+function FclTab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm()
+  const load = async () => {
+    setLoading(true)
+    try { const { data } = await sarConfigAPI.listFcl(); setRows(data || []) }
+    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  const save = async () => {
+    try {
+      await sarConfigAPI.upsertFcl(await form.validateFields())
+      message.success('FCL rule saved'); setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+  const cols = [
+    { title: 'Product', dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: 'Scheme', dataIndex: 'scheme_id', render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: 'Exposure', dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Product</Tag> },
+    { title: 'Basis', dataIndex: 'fcl_basis', width: 90, render: (v: string) => <Tag color={v === 'FORMULA' ? 'purple' : 'blue'}>{v}</Tag> },
+    { title: 'Flat FCL', dataIndex: 'flat_fcl_amount', render: (v?: number) => (v != null ? v.toLocaleString('en-IN') : '—') },
+    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+  ]
+  return (
+    <div style={card}>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New FCL Rule</Button>
+      <Alert type="info" showIcon style={{ marginBottom: 12 }}
+        message="FORMULA-based FCLs are built in the Formula Engine tab (formula_type = FCL). Paste the formula ID here, or use FLAT for a fixed Free Cover Limit." />
+      <Table size="small" rowKey={(r) => r.id} dataSource={rows} columns={cols} loading={loading} pagination={false} />
+      <Modal title="Free Cover Limit Rule" open={open} onOk={save} onCancel={() => setOpen(false)} width={540} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ fcl_basis: 'FLAT', apply_fcl_per_benefit: false, premium_payer_filter: 'ANY', is_active: true }}>
+          <Form.Item name="product_code" label="Product Code" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="scheme_id" label="Scheme ID (blank = all schemes)"><Input /></Form.Item>
+          <Form.Item name="exposure_group" label="Exposure Group (blank = product-level)"><Select allowClear>
+            {['EMPLOYER_BASE', 'VOLUNTARY_TOPUP', 'INDIVIDUAL', 'FREE_COVER', 'EXCESS_COVER', 'OPTIONAL_RIDER'].map(t => <Option key={t} value={t}>{t}</Option>)}
+          </Select></Form.Item>
+          <Form.Item name="fcl_basis" label="Basis"><Select>{FCL_BASIS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+          <Form.Item noStyle shouldUpdate={(p, n) => p.fcl_basis !== n.fcl_basis}>
+            {({ getFieldValue }) => getFieldValue('fcl_basis') === 'FLAT' ? (
+              <Form.Item name="flat_fcl_amount" label="Flat FCL Amount" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} /></Form.Item>
+            ) : (
+              <Form.Item name="formula_id" label="FCL Formula ID (from Formula Engine)" rules={[{ required: true }]}><Input /></Form.Item>
+            )}
+          </Form.Item>
+          <Form.Item name="premium_payer_filter" label="Premium Payer Filter"><Select>{PAYERS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── NML Config ──────────────────────────
+function NmlTab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm()
+  const load = async () => {
+    setLoading(true)
+    try { const { data } = await sarConfigAPI.listNml(); setRows(data || []) }
+    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  const save = async () => {
+    try {
+      await sarConfigAPI.upsertNml(await form.validateFields())
+      message.success('NML band saved'); setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+  const cols = [
+    { title: 'Product', dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: 'Age', render: (_: any, r: any) => `${r.age_min ?? '≤'}–${r.age_max ?? '∞'}` },
+    { title: 'SAR Band', render: (_: any, r: any) => `${(r.sar_min ?? 0).toLocaleString('en-IN')} → ${r.sar_max ? r.sar_max.toLocaleString('en-IN') : '∞'}` },
+    { title: 'Category', dataIndex: 'nml_category', width: 130, render: (v: string) => <Tag color={v === 'NON_MEDICAL' ? 'green' : 'orange'}>{v}</Tag> },
+    { title: 'Tests', dataIndex: 'medical_tests_required', render: (v: string[]) => (v || []).join(', ') || '—' },
+  ]
+  return (
+    <div style={card}>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New NML Band</Button>
+      <Table size="small" rowKey={(r) => r.id} dataSource={rows} columns={cols} loading={loading} pagination={false} />
+      <Modal title="Non-Medical Limit Band" open={open} onOk={save} onCancel={() => setOpen(false)} width={560} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ nml_category: 'NON_MEDICAL', sar_min: 0, medical_tests_required: [], reinsurer_approval_required: false, is_active: true }}>
+          <Form.Item name="product_code" label="Product Code" rules={[{ required: true }]}><Input /></Form.Item>
+          <Space wrap>
+            <Form.Item name="age_min" label="Age From"><InputNumber /></Form.Item>
+            <Form.Item name="age_max" label="Age To"><InputNumber /></Form.Item>
+            <Form.Item name="sar_min" label="SAR Min"><InputNumber style={{ width: 130 }} /></Form.Item>
+            <Form.Item name="sar_max" label="SAR Max"><InputNumber style={{ width: 130 }} /></Form.Item>
+          </Space>
+          <Form.Item name="nml_category" label="Category"><Select>
+            {['NON_MEDICAL', 'MEDICAL', 'PARAMEDICAL', 'SPECIAL'].map(t => <Option key={t} value={t}>{t}</Option>)}
+          </Select></Form.Item>
+          <Form.Item name="medical_tests_required" label="Medical Tests (comma-separated)">
+            <Select mode="tags" placeholder="e.g. FULL_MEDICAL, HBA1C, ECG" tokenSeparators={[',']} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── RI Retention (Phase 4) ─────────────
+function RITab({ notify }: { notify: () => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [form] = Form.useForm()
+  const load = async () => {
+    setLoading(true)
+    try { const { data } = await sarConfigAPI.listRI(); setRows(data || []) }
+    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+  const openModal = (r?: any) => {
+    setEditing(r || null)
+    form.resetFields()
+    if (r) form.setFieldsValue(r)
+    setOpen(true)
+  }
+  const save = async () => {
+    try {
+      await sarConfigAPI.upsertRI(await form.validateFields())
+      message.success('Reinsurer saved'); setOpen(false); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+  const inr = (v?: number) => v != null ? '₹' + Number(v).toLocaleString('en-IN') : '—'
+  const cols = [
+    { title: 'Code', dataIndex: 'reinsurer_code', render: (v: string) => <Tag color="volcano" style={mono}>{v}</Tag> },
+    { title: 'Name', dataIndex: 'reinsurer_name', render: (v: string, r: any) =>
+      <a onClick={() => openModal(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
+    { title: 'Retention Limit', dataIndex: 'retention_limit', width: 140, render: inr },
+    { title: 'Products', dataIndex: 'product_codes', render: (v: string[]) => (v || []).map(p =>
+      <Tag key={p} style={{ marginRight: 4 }}>{p}</Tag>) },
+    { title: 'Treaty', dataIndex: 'treaty_code', render: (v?: string) => v ? <span style={mono}>{v}</span> : '—' },
+    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+  ]
+  return (
+    <div style={card}>
+      <div style={{ marginBottom: 8 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>New Reinsurer</Button>
+        <span style={{ fontSize: 11, color: 'var(--slate-500)', marginLeft: 12 }}>
+          Retention limit = net amount at risk (excess SAR after FCL) above which reinsurer approval is required (SAR engine step 10).
+        </span>
+      </div>
+      <Table size="small" rowKey="id" dataSource={rows} columns={cols} loading={loading} pagination={false} />
+      <Modal title={editing ? `Edit Reinsurer · ${editing.reinsurer_code}` : 'New Reinsurer'} open={open} onOk={save} onCancel={() => setOpen(false)} width={600} destroyOnClose>
+        <Form form={form} layout="vertical" initialValues={{ treaty_type: 'FACULTATIVE', currency: 'INR', is_active: true }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
+            <Form.Item name="reinsurer_code" label="Reinsurer Code" rules={[{ required: true }]}><Input disabled={!!editing} /></Form.Item>
+            <Form.Item name="reinsurer_name" label="Reinsurer Name" rules={[{ required: true }]}><Input /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
+            <Form.Item name="retention_limit" label="Retention Limit (INR)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="currency" label="Currency"><Input /></Form.Item>
+          </div>
+          <Form.Item name="product_codes" label="Products (codes) — leave empty for all">
+            <Select mode="tags" placeholder="e.g. IND-TERM-20" />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
+            <Form.Item name="treaty_code" label="Treaty Code"><Input /></Form.Item>
+            <Form.Item name="treaty_type" label="Treaty Type"><Input /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
+            <Form.Item name="contact_name" label="Contact"><Input /></Form.Item>
+            <Form.Item name="contact_email" label="Contact Email"><Input /></Form.Item>
+          </div>
+          <Form.Item name="notes" label="Notes"><Input.TextArea rows={2} /></Form.Item>
+          <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─────────────────────────── Page ────────────────────────────────
+export default function SarConfigPage() {
+  const [tick, setTick] = useState(0)
+  // After a save each tab reloads itself; notify is a cross-tab hook for
+  // future needs and intentionally does not reset the active tab.
+  const notify = () => {}
+  const items = [
+    { key: 'benefits', label: 'Benefit Master', children: <BenefitsTab notify={notify} /> },
+    { key: 'risk-groups', label: 'Risk Groups', children: <RiskGroupsTab notify={notify} /> },
+    { key: 'exposure-groups', label: 'Exposure Groups', children: <ExposureGroupsTab notify={notify} /> },
+    { key: 'aggregation', label: 'Aggregation', children: <AggregationTab notify={notify} /> },
+    { key: 'fcl', label: 'FCL Config', children: <FclTab notify={notify} /> },
+    { key: 'nml', label: 'NML Config', children: <NmlTab notify={notify} /> },
+    { key: 'ri', label: 'RI Retention', children: <RITab notify={notify} /> },
+    { key: 'medical-standards', label: 'Medical Standards', children: <MedicalStandardsPage embedded /> },
+  ]
+  return (
+    <div style={{ padding: 20 }}>
+      <PageHeader onReload={() => setTick(t => t + 1)} />
+      <Tabs items={items} key={`tabs-${tick}`} destroyInactiveTabPane />
+    </div>
+  )
+}

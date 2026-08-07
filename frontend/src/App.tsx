@@ -24,6 +24,9 @@ import AgentPortalPage from './pages/AgentPortalPage'
 import PolicyAdminPage from './pages/PolicyAdminPage'
 import IntegrationsPage from './pages/IntegrationsPage'
 import DeveloperPortalPage from './pages/DeveloperPortalPage'
+import SarConfigPage from './pages/SarConfigPage'
+import FormulaEnginePage from './pages/FormulaEnginePage'
+import MedicalStandardsPage from './pages/MedicalStandardsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user)
@@ -62,6 +65,9 @@ export default function App() {
           <Route path="audit"   element={<AuditLogPage />} />
           <Route path="members" element={<MembersPage />} />
           <Route path="policy-admin" element={<PolicyAdminPage />} />
+          <Route path="sar-config" element={<SarConfigPage />} />
+          <Route path="medical-standards" element={<MedicalStandardsPage />} />
+          <Route path="formula-engine" element={<FormulaEnginePage />} />
           <Route path="/integrations" element={<IntegrationsPage />} />
           <Route path="/developer-portal" element={<DeveloperPortalPage />} />
           <Route path="/my-account" element={<MyAccountPage />} />

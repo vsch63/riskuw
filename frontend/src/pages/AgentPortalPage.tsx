@@ -166,6 +166,38 @@ function SubmitProposalTab() {
           </div>}
           showIcon closable onClose={() => setResult(null)} style={{ marginBottom: 8 }}
         />
+        {result?.sar?.configured && (
+          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--teal-400)',
+              textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+              Sum-at-Risk · Free Cover Limit
+              {(result.medical_requirements || []).length > 0 && (
+                <span style={{ float: 'right', color: '#f59e0b', fontWeight: 600 }}>
+                  NML: {(result.medical_requirements || []).join(' · ')}
+                </span>
+              )}
+            </div>
+            <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ color: '#6b7280', textAlign: 'left' }}>
+                  <th style={{ padding: '4px 6px' }}>Exposure Group</th>
+                  <th style={{ padding: '4px 6px' }}>Gross SAR</th>
+                  <th style={{ padding: '4px 6px' }}>Excess SAR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.keys(result.sar.gross_sar || {}).map((eg: string) => (
+                  <tr key={eg}>
+                    <td style={{ padding: '4px 6px' }}>{eg}</td>
+                    <td style={{ padding: '4px 6px' }}>₹{Number(result.sar.gross_sar[eg]).toLocaleString('en-IN')}</td>
+                    <td style={{ padding: '4px 6px' }}>₹{Number(result.sar.excess_sar?.[eg] || 0).toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {result?.outcome?.includes('APPROVED') && (
           <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
             <Button type="primary"

@@ -72,6 +72,15 @@ export default function WorkbenchPage() {
   const [assignedF, setAssignedF] = useState('ALL')
   const [priorityF, setPriorityF] = useState('ALL')
   const [selCase, setSelCase]   = useState<QueueCase | null>(null)
+  const [sla, setSla] = useState<{ stats?: Record<string, number>; breached_cases?: any[] } | null>(null)
+  const [slaOpen, setSlaOpen] = useState(false)
+
+  const loadSla = () => {
+    wbApi.get('/workbench/sla-dashboard')
+      .then((d: any) => setSla(d ?? null))
+      .catch(() => setSla(null))
+  }
+  useEffect(() => { loadSla() }, [])
 
   const load = () => {
     setLoading(true)
@@ -168,6 +177,39 @@ export default function WorkbenchPage() {
         </p>
       </div>
 
+      {/* ── SLA health strip ── */}
+      {sla?.stats && (
+        <div style={{ display:'flex', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+          <div style={{ flex:1, minWidth:150, padding:'14px 16px', borderRadius:10,
+            background:'#111827', border:'1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize:11, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.06em' }}>SLA Breached</div>
+            <div style={{ fontSize:24, fontWeight:700, color:'#ef4444' }}>{sla.stats.sla_breached}</div>
+          </div>
+          <div style={{ flex:1, minWidth:150, padding:'14px 16px', borderRadius:10,
+            background:'#111827', border:'1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize:11, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.06em' }}>Within SLA</div>
+            <div style={{ fontSize:24, fontWeight:700, color:'#22c55e' }}>{sla.stats.within_sla}</div>
+          </div>
+          <div style={{ flex:1, minWidth:150, padding:'14px 16px', borderRadius:10,
+            background:'#111827', border:'1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize:11, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.06em' }}>Open Cases</div>
+            <div style={{ fontSize:24, fontWeight:700, color:'#e2e8f0' }}>{sla.stats.open_cases}</div>
+          </div>
+          <div style={{ flex:1, minWidth:150, padding:'14px 16px', borderRadius:10,
+            background:'#111827', border:'1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize:11, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.06em' }}>Avg TAT (hrs)</div>
+            <div style={{ fontSize:24, fontWeight:700, color:'#e2e8f0' }}>{sla.stats.avg_tat_hours}</div>
+          </div>
+          {(sla.stats.sla_breached ?? 0) > 0 && (
+            <button onClick={() => setSlaOpen(true)} style={{ padding:'14px 16px', borderRadius:10,
+              background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)',
+              color:'#ef4444', cursor:'pointer', fontWeight:600, fontSize:13 }}>
+              View {sla.stats.sla_breached} breached
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={{ display:'flex', gap:12, marginBottom:16 }}>
         <Select value={statusF} onChange={setStatusF} style={{ width:200 }} size="small">
           <Option value="ALL">All statuses</Option>
@@ -199,6 +241,31 @@ export default function WorkbenchPage() {
       )}
 
       <CaseDrawer caseRow={selCase} underwriters={underwriters} onClose={() => setSelCase(null)} onChanged={load}/>
+
+      {/* ── Breached SLA modal ── */}
+      <Modal
+        open={slaOpen} onCancel={() => setSlaOpen(false)} footer={null}
+        title={`Breached SLA — ${sla?.stats?.sla_breached ?? 0} case(s)`} width={680}
+      >
+        {(!sla?.breached_cases || sla.breached_cases.length === 0) ? (
+          <Empty description="No breached cases" />
+        ) : (
+          <Table
+            dataSource={sla.breached_cases} rowKey="case_ref_id" size="small"
+            pagination={false}
+            columns={[
+              { title: 'Case', dataIndex: 'case_ref_id', width: 60 },
+              { title: 'Applicant', dataIndex: 'applicant_name' },
+              { title: 'Product', dataIndex: 'product_code', width: 90 },
+              { title: 'Assignee', dataIndex: 'assigned_to', width: 110 },
+              { title: 'Priority', dataIndex: 'priority', width: 90,
+                render: (p: string) => <Tag style={{ color: PRIORITY_COLOR[p] || '#94a3b8' }}>{p}</Tag> },
+              { title: 'Due', dataIndex: 'sla_due_at', width: 170,
+                render: (d: string) => <span style={{ color:'#ef4444' }}>{d ? new Date(d).toLocaleString() : '—'}</span> },
+            ]}
+          />
+        )}
+      </Modal>
     </div>
   )
 }
