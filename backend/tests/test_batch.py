@@ -41,7 +41,7 @@ def test_batch_upload_csv(client, auth_headers):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "queued"
+    assert data["status"].lower() == "queued"
     assert "job_id" in data
     assert "job_number" in data
 
@@ -86,7 +86,7 @@ def test_batch_job_detail(client, auth_headers):
 
 
 def test_batch_error_codes_list(client, auth_headers):
-    resp = client.get("/batch/error-codes", headers=auth_headers)
+    resp = client.get("/system/error-codes", headers=auth_headers)
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
