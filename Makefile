@@ -91,7 +91,7 @@ ci-test:        ## Fresh-DB CI run: migrate + seed + full suite (mirrors GitHub 
 	  -c "CREATE DATABASE riskuw_ci OWNER uw_user;" >/dev/null
 	@for f in migrations/V*.sql; do \
 	  echo "-- $$f"; \
-	  docker exec -i riskuw_postgres psql -U uw_user -d riskuw_ci < "$$f" || exit 1; \
+	  docker exec -i riskuw_postgres psql -U uw_user -d riskuw_ci -v ON_ERROR_STOP=1 < "$$f" || exit 1; \
 	done
 	@DATABASE_URL="postgresql://uw_user:$${DB_PASSWORD:-uw_password_change_in_prod}@localhost:5433/riskuw_ci" \
 	  $(shell [ -x venv/bin/python ] && echo venv/bin/python || echo python3) scripts/ci/seed_test_db.py
