@@ -1,5 +1,5 @@
 """
-routers/premium_formula.py
+routers/uw_formula.py
 """
 from __future__ import annotations
 
@@ -210,8 +210,8 @@ def get_user_labels(product_code: str, user: CurrentUser = CurrentUser):
         cur.execute(
             """
             SELECT s.user_label, s.user_value AS default_value, s.description
-            FROM premium_formula_step s
-            JOIN premium_formula f ON f.id = s.formula_id
+            FROM uw_formula_step s
+            JOIN uw_formula f ON f.id = s.formula_id
             WHERE f.product_code = %s
               AND f.formula_type = 'BASE_PREMIUM'
               AND f.is_active = true
@@ -271,8 +271,8 @@ def list_formulas(product_code: str, user: CurrentUser = CurrentUser):
         cur.execute(
             """
             SELECT f.*, COUNT(s.id) AS step_count
-            FROM premium_formula f
-            LEFT JOIN premium_formula_step s ON s.formula_id = f.id
+            FROM uw_formula f
+            LEFT JOIN uw_formula_step s ON s.formula_id = f.id
             WHERE f.product_code = %s
             GROUP BY f.id
             ORDER BY f.formula_type, f.effective_date DESC
@@ -297,7 +297,7 @@ def create_formula(product_code: str, body: FormulaIn, user: CurrentUser = Curre
         formula_id = str(uuid.uuid4())
         cur.execute(
             """
-            INSERT INTO premium_formula
+            INSERT INTO uw_formula
                 (id, product_code, formula_name, description, formula_type,
                  is_active, effective_date, expiry_date, created_by, updated_by)
             VALUES (%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -324,7 +324,7 @@ def get_formula(product_code: str, formula_id: str, user: CurrentUser = CurrentU
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM premium_formula WHERE id=%s::uuid AND product_code=%s",
+            "SELECT * FROM uw_formula WHERE id=%s::uuid AND product_code=%s",
             (formula_id, product_code),
         )
         formula = _row(cur.fetchone())
@@ -338,7 +338,7 @@ def get_formula(product_code: str, formula_id: str, user: CurrentUser = CurrentU
                    s.user_value::float AS user_value,
                    s.user_label, s.scale_id,
                    r.name AS scale_name
-            FROM premium_formula_step s
+            FROM uw_formula_step s
             LEFT JOIN uw_rate_scale r ON r.id = s.scale_id
             WHERE s.formula_id = %s::uuid
             ORDER BY s.seq_no
@@ -364,7 +364,7 @@ def update_formula(product_code: str, formula_id: str, body: FormulaIn, user: Cu
         cur = conn.cursor()
         cur.execute(
             """
-            UPDATE premium_formula
+            UPDATE uw_formula
             SET formula_name=%s, description=%s, formula_type=%s,
                 is_active=%s, effective_date=%s, expiry_date=%s, updated_by=%s
             WHERE id=%s::uuid AND product_code=%s
@@ -399,7 +399,7 @@ def delete_formula(product_code: str, formula_id: str, user: CurrentUser = Curre
         conn.autocommit = False
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM premium_formula WHERE id=%s::uuid AND product_code=%s",
+            "DELETE FROM uw_formula WHERE id=%s::uuid AND product_code=%s",
             (formula_id, product_code),
         )
         if cur.rowcount == 0:
@@ -428,7 +428,7 @@ def add_step(product_code: str, formula_id: str, body: StepIn, user: CurrentUser
         conn.autocommit = False
         cur = conn.cursor()
         cur.execute(
-            "SELECT id FROM premium_formula WHERE id=%s::uuid AND product_code=%s",
+            "SELECT id FROM uw_formula WHERE id=%s::uuid AND product_code=%s",
             (formula_id, product_code),
         )
         if not cur.fetchone():
@@ -436,7 +436,7 @@ def add_step(product_code: str, formula_id: str, body: StepIn, user: CurrentUser
         step_id = str(uuid.uuid4())
         cur.execute(
             """
-            INSERT INTO premium_formula_step
+            INSERT INTO uw_formula_step
                 (id, formula_id, seq_no, description, operator, factor,
                  parameter_type, user_value, user_label, scale_id)
             VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -477,7 +477,7 @@ def delete_step(product_code: str, formula_id: str, step_id: str, user: CurrentU
         conn.autocommit = False
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM premium_formula_step WHERE id=%s::uuid AND formula_id=%s::uuid",
+            "DELETE FROM uw_formula_step WHERE id=%s::uuid AND formula_id=%s::uuid",
             (step_id, formula_id),
         )
         if cur.rowcount == 0:

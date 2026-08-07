@@ -11,7 +11,7 @@ with open(filepath, "r") as f:
 
 # ── Fix 3: Replace SELECT s.* in get_formula steps query ──────────────────────
 old = '''            SELECT s.*, r.name AS scale_name
-            FROM premium_formula_step s
+            FROM uw_formula_step s
             LEFT JOIN uw_rate_scale r ON r.id = s.scale_id
             WHERE s.formula_id = %s::uuid
             ORDER BY s.seq_no'''
@@ -22,7 +22,7 @@ new = '''            SELECT s.id, s.formula_id, s.seq_no, s.description,
                    s.user_value::float AS user_value,
                    s.user_label, s.scale_id,
                    r.name AS scale_name
-            FROM premium_formula_step s
+            FROM uw_formula_step s
             LEFT JOIN uw_rate_scale r ON r.id = s.scale_id
             WHERE s.formula_id = %s::uuid
             ORDER BY s.seq_no'''

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from database import get_conn, release_conn
 from routers.auth import CurrentUser
+from services.inapp_notify import emit, emit_to_case_owner
 
 logger = logging.getLogger("uw_platform")
 router = APIRouter(prefix="/workbench", tags=["workbench"])
@@ -177,6 +178,88 @@ def get_queue(
         release(conn)
 
 
+# ── SLA Dashboard ────────────────────────────────────────────────────────────
+
+@router.get("/sla-dashboard")
+def sla_dashboard(current: CurrentUser):
+    """Aggregate SLA health for the workbench: breach counts, avg TAT by
+    product, the breached queue, and a status breakdown."""
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        now = datetime.now(timezone.utc)
+
+        # Core counts + avg TAT
+        cur.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE ca.sla_due_at IS NOT NULL AND ca.sla_due_at < now())
+                    AS sla_breached,
+                COUNT(*) FILTER (WHERE ca.sla_due_at IS NOT NULL AND ca.sla_due_at >= now())
+                    AS within_sla,
+                COUNT(*) FILTER (WHERE ca.sla_due_at IS NULL) AS no_sla,
+                COUNT(*) FILTER (WHERE ca.workbench_status = 'OPEN') AS open_cases,
+                COUNT(*) FILTER (WHERE ca.workbench_status IN ('APPROVED','DECLINED'))
+                    AS decided_cases,
+                COALESCE(AVG(EXTRACT(EPOCH FROM (coalesce(ca.decided_at, now())
+                    - pq.decision_date)) / 3600.0), 0) AS avg_tat_hours
+            FROM case_assignments ca
+            LEFT JOIN policy_admin_queue pq ON pq.id = ca.case_ref_id
+        """)
+        stats = _row(cur.fetchone())
+
+        # Avg TAT by product (last 90 days, decided cases only)
+        cur.execute("""
+            SELECT pq.product_code AS product_code,
+                   COUNT(*) AS cases,
+                   ROUND(AVG(EXTRACT(EPOCH FROM (ca.decided_at - pq.decision_date)) / 3600.0), 1)
+                       AS avg_tat_hours
+            FROM case_assignments ca
+            JOIN policy_admin_queue pq ON pq.id = ca.case_ref_id
+            WHERE ca.decided_at IS NOT NULL
+              AND pq.decision_date >= now() - interval '90 days'
+            GROUP BY pq.product_code
+            ORDER BY avg_tat_hours DESC
+        """)
+        tat_by_product = [_row(r) for r in cur.fetchall()]
+
+        # Breached queue (most overdue first)
+        cur.execute("""
+            SELECT pq.id AS case_ref_id, pq.applicant_ref, pq.applicant_name,
+                   pq.product_code, ca.assigned_to, ca.workbench_status, ca.priority,
+                   ca.sla_due_at
+            FROM case_assignments ca
+            JOIN policy_admin_queue pq ON pq.id = ca.case_ref_id
+            WHERE ca.sla_due_at IS NOT NULL AND ca.sla_due_at < now()
+              AND ca.workbench_status NOT IN ('APPROVED','DECLINED','CLOSED')
+            ORDER BY ca.sla_due_at ASC
+            LIMIT 100
+        """)
+        breached = []
+        for r in cur.fetchall():
+            d = _row(r)
+            d["sla_breached"] = True
+            breached.append(d)
+
+        cur.close()
+        return {
+            "stats": {
+                "sla_breached":  int(stats.get("sla_breached") or 0),
+                "within_sla":    int(stats.get("within_sla") or 0),
+                "no_sla":        int(stats.get("no_sla") or 0),
+                "open_cases":    int(stats.get("open_cases") or 0),
+                "decided_cases": int(stats.get("decided_cases") or 0),
+                "avg_tat_hours": round(float(stats.get("avg_tat_hours") or 0), 1),
+            },
+            "tat_by_product": tat_by_product,
+            "breached_cases": breached,
+        }
+    except Exception as e:
+        logger.error(f"sla_dashboard failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to load SLA dashboard: {e}")
+    finally:
+        release(conn)
+
+
 # ── Case detail ───────────────────────────────────────────────────────────────
 
 @router.get("/cases/{case_id}")
@@ -286,6 +369,13 @@ def assign_case(case_id: int, body: AssignRequest, current: CurrentUser):
             RETURNING *
         """, (body.assigned_to, current.username, case_id))
         row = _row(cur.fetchone())
+        # ── Event trigger: notify the newly assigned underwriter ──
+        if body.assigned_to and body.assigned_to != current.username:
+            emit(conn, tenant_id=current.tenant_id, recipient=body.assigned_to,
+                 event_type="ASSIGNMENT",
+                 title=f"Case {case_id} assigned to you",
+                 body=f"Case {case_id} was assigned by {current.username}.",
+                 case_ref_id=case_id)
         conn.commit()
         cur.close()
         return row
@@ -374,6 +464,12 @@ def add_note(case_id: int, body: NoteRequest, current: CurrentUser):
         """, (case_id, current.username, body.note.strip()))
         row = _row(cur.fetchone())
         cur.execute("UPDATE case_assignments SET updated_at=now() WHERE case_ref_id=%s", (case_id,))
+        # ── Event trigger: notify the case owner when someone else notes ──
+        emit_to_case_owner(conn, case_id, event_type="NOTE",
+                           title=f"New note on case {case_id}",
+                           body=body.note.strip()[:200],
+                           except_actor=current.username,
+                           tenant_id=current.tenant_id)
         conn.commit()
         cur.close()
         return row
@@ -408,6 +504,13 @@ def add_requirement(case_id: int, body: RequirementCreate, current: CurrentUser)
                 updated_at=now()
             WHERE case_ref_id=%s
         """, (case_id,))
+        # ── Event trigger: notify the case owner a requirement was requested ──
+        emit_to_case_owner(conn, case_id, event_type="REQUIREMENT",
+                           title=f"Requirement requested — case {case_id}",
+                           body=f"{body.requirement_type} requested by {current.username}: "
+                                f"{(body.description or '').strip()[:160]}",
+                           except_actor=current.username,
+                           tenant_id=current.tenant_id)
         conn.commit()
         cur.close()
         return row
@@ -456,6 +559,15 @@ def update_requirement(req_id: int, body: RequirementUpdate, current: CurrentUse
                 WHERE case_ref_id=%s
             """, (case_ref_id,))
 
+        # ── Event trigger: notify the requester that their item arrived ──
+        if body.status in ("RECEIVED", "WAIVED") and row.get("requested_by") \
+                and row["requested_by"] != current.username:
+            emit(conn, tenant_id=current.tenant_id, recipient=row["requested_by"],
+                 event_type="REQUIREMENT",
+                 title=f"Requirement {body.status.lower()} — case {case_ref_id}",
+                 body=f"{row['requirement_type']} was marked {body.status} by {current.username}.",
+                 case_ref_id=case_ref_id)
+
         conn.commit()
         cur.close()
         return row
@@ -483,6 +595,21 @@ def record_decision(case_id: int, body: DecisionRequest, current: CurrentUser):
         new_wb_status = "APPROVED" if "APPROVED" in body.final_outcome.upper() else (
             "DECLINED" if "DECLIN" in body.final_outcome.upper() else "CLOSED"
         )
+
+        # ── Gate: pending requirements must be resolved before a final decision ──
+        if new_wb_status in ("APPROVED", "DECLINED"):
+            cur.execute("""
+                SELECT COUNT(*) FROM case_requirements
+                WHERE case_ref_id=%s AND status='REQUESTED'
+            """, (case_id,))
+            pending_reqs = cur.fetchone()
+            pending_reqs = (pending_reqs[0] if isinstance(pending_reqs, tuple) else pending_reqs.get("count")) or 0
+            if pending_reqs > 0:
+                raise HTTPException(
+                    400,
+                    f"Cannot finalize decision: {pending_reqs} pending requirement(s) still REQUESTED. "
+                    "Mark them RECEIVED or WAIVED first.",
+                )
 
         cur.execute("""
             UPDATE case_assignments
@@ -553,8 +680,23 @@ def record_decision(case_id: int, body: DecisionRequest, current: CurrentUser):
             except Exception as ri_err:
                 logger.warning(f"RI trigger failed for workbench decision {case_id}: {ri_err}")
 
+        # ── Event trigger: notify the case owner when someone else decides ──
+        try:
+            emit_to_case_owner(conn, case_id, event_type="DECISION",
+                               title=f"Decision recorded — case {case_id}",
+                               body=f"Case {case_id} decided by {current.username}: "
+                                    f"{body.final_outcome} — {body.final_reason.strip()[:140]}",
+                               except_actor=current.username,
+                               tenant_id=current.tenant_id)
+            conn.commit()
+        except Exception as notif_err:
+            logger.warning(f"Decision notification failed for case {case_id}: {notif_err}")
+
         cur.close()
         return assignment
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
         conn.rollback()
         logger.error(f"record_decision failed: {e}", exc_info=True)

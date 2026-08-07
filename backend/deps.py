@@ -18,8 +18,16 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 
 # ── JWT config ────────────────────────────────────────────────────
-SECRET_KEY  = os.environ.get("JWT_SECRET", "CHANGE_ME_IN_PRODUCTION")
-ALGORITHM   = "HS256"
+# The signing key must be configured — refusing to boot with the old
+# placeholder means a mis-deployed instance fails loudly instead of issuing
+# tokens signed with a public, guessable key.
+SECRET_KEY = os.environ.get("JWT_SECRET", "")
+if not SECRET_KEY or SECRET_KEY == "CHANGE_ME_IN_PRODUCTION":
+    raise RuntimeError(
+        "JWT_SECRET is not configured. Set a strong secret in the environment "
+        "(see docker-compose.yml / .env) before starting the API."
+    )
+ALGORITHM = "HS256"
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 

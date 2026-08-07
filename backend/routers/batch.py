@@ -57,8 +57,8 @@ def download_template(
         cur.execute(
             """
             SELECT s.user_label, s.user_value AS default_value, s.description
-            FROM premium_formula_step s
-            JOIN premium_formula f ON f.id = s.formula_id
+            FROM uw_formula_step s
+            JOIN uw_formula f ON f.id = s.formula_id
             WHERE f.product_code = %s
               AND f.formula_type = 'BASE_PREMIUM'
               AND f.is_active = true
@@ -260,7 +260,7 @@ def _calculate_premium(cur, product_code: str, payload: dict, result: dict) -> d
 
     # 1. Check if formula exists for this product
     cur.execute("""
-        SELECT id FROM premium_formula
+        SELECT id FROM uw_formula
         WHERE product_code = %s
           AND formula_type = 'BASE_PREMIUM'
           AND is_active = true
@@ -279,7 +279,7 @@ def _calculate_premium(cur, product_code: str, payload: dict, result: dict) -> d
     cur.execute("""
         SELECT seq_no, operator, factor, parameter_type,
                user_value, user_label, scale_id, description
-        FROM premium_formula_step
+        FROM uw_formula_step
         WHERE formula_id = %s
         ORDER BY seq_no
     """, (formula_id,))

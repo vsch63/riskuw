@@ -26,12 +26,18 @@ import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import jwt
 from deps import CurrentUser, AdminOnly, TokenData, get_current_user, SECRET_KEY, ALGORITHM
+from config import cfg
 from schemas.auth import (
-    LoginRequest, MFAVerifyRequest, TokenResponse,
-    UserCreate, UserOut, PasswordReset,
+    LoginRequest, MFAVerifyRequest, MFASetupRequest, MFAVerifySetupRequest,
+    TokenResponse, UserCreate, UserOut, PasswordReset,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# When cfg.mfa_enforced is true, users with these roles must have TOTP set up.
+MFA_ENFORCED_ROLES = {
+    "admin", "super_admin", "underwriter", "senior_underwriter", "agent",
+}
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -41,6 +47,18 @@ def _get_db():
 
 def _hash(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+
+def _validate_password_strength(password: str) -> None:
+    """Enforce the password policy: >= 8 chars with at least one letter and
+    one digit. Raises HTTPException 400 when the policy is violated."""
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one letter and one number",
+        )
 
 def _verify(password: str, hashed: str) -> bool:
     try:
@@ -101,7 +119,7 @@ async def login(body: LoginRequest, request: Request):
         # Fetch user — accept both username and email (industry standard)
         cur.execute(
             "SELECT u.username, u.hashed_password, u.role, u.is_active, u.full_name, "
-            "u.tenant_id::text, t.tenant_name "
+            "u.tenant_id::text, t.tenant_name, u.must_change_password "
             "FROM uw_user u LEFT JOIN tenant t ON t.id = u.tenant_id "
             "WHERE u.username = %s AND u.is_deleted = false",
             (body.username,),
@@ -112,7 +130,7 @@ async def login(body: LoginRequest, request: Request):
         if not user and "@" in (body.username or ""):
             cur.execute(
                 "SELECT u.username, u.hashed_password, u.role, u.is_active, u.full_name, "
-                "u.tenant_id::text, t.tenant_name "
+                "u.tenant_id::text, t.tenant_name, u.must_change_password "
                 "FROM uw_user u LEFT JOIN tenant t ON t.id = u.tenant_id "
                 "WHERE u.email = %s AND u.is_deleted = false",
                 (body.username,),
@@ -120,7 +138,7 @@ async def login(body: LoginRequest, request: Request):
             user = cur.fetchone()
         user_dict: dict[str, Any] = (
             dict(user) if hasattr(user, "keys") else
-            dict(zip(["username", "hashed_password", "role", "is_active", "tenant_id", "tenant_name"], user))
+            dict(zip(["username", "hashed_password", "role", "is_active", "tenant_id", "tenant_name", "must_change_password"], user))
         ) if user else {}
 
         if not user or not user_dict.get("is_active"):
@@ -152,7 +170,10 @@ async def login(body: LoginRequest, request: Request):
         conn.commit()
         cur.close()
 
-        mfa_required = bool(mfa_dict.get("is_enabled") and mfa_dict.get("is_verified"))
+        mfa_configured = bool(mfa_dict.get("is_enabled") and mfa_dict.get("is_verified"))
+        mfa_enforced   = bool(cfg.mfa_enforced and user_dict["role"] in MFA_ENFORCED_ROLES)
+        mfa_required   = mfa_configured or mfa_enforced
+        enrollment_required = mfa_enforced and not mfa_configured
 
         if mfa_required:
             # Issue short-lived MFA session token (5 min)
@@ -168,6 +189,8 @@ async def login(body: LoginRequest, request: Request):
                 tenant_id=user_dict.get("tenant_id"),
                 mfa_required=True,
                 mfa_session_token=session_tok,
+                password_change_required=bool(user_dict.get("must_change_password")),
+                mfa_enrollment_required=enrollment_required,
             )
 
         # No MFA — issue full token
@@ -183,6 +206,7 @@ async def login(body: LoginRequest, request: Request):
             full_name=user_dict.get("full_name"),
             tenant_id=user_dict.get("tenant_id"),
             tenant_name=user_dict.get("tenant_name"),
+            password_change_required=bool(user_dict.get("must_change_password")),
         )
     finally:
         release(conn)
@@ -284,6 +308,124 @@ async def verify_mfa(body: MFAVerifyRequest, request: Request):
         release(conn)
 
 
+# ── MFA Enrollment ────────────────────────────────────────────────────────────
+# setup  → generate a TOTP secret (pending enrolment, is_enabled=false)
+# verify → confirm a code, flip is_enabled=true, issue full token
+# disable → flip is_enabled=false (ops/user can turn off; lets them re-enroll)
+
+def _resolve_auth_identity(body_session_token: str | None, request: Request) -> TokenData:
+    """Resolve identity from either the MFA session token or the Bearer header.
+    Keeps the three MFA endpoints DRY."""
+    from deps import decode_token
+    if body_session_token:
+        return decode_token(body_session_token)
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        return decode_token(auth[7:])
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+@router.post("/mfa/setup")
+async def mfa_setup(body: MFASetupRequest, request: Request):
+    token_data = _resolve_auth_identity(body.session_token, request)
+    if token_data.username != body.username:
+        raise HTTPException(status_code=401, detail="Username mismatch")
+
+    secret = pyotp.random_base32()
+    totp = pyotp.TOTP(secret, issuer=cfg.platform_name)
+    otpauth_uri = totp.provisioning_uri(name=body.username, issuer_name=cfg.platform_name)
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO mfa_config (username, totp_secret, is_enabled, is_verified)
+            VALUES (%s, %s, false, false)
+            ON CONFLICT (username)
+            DO UPDATE SET totp_secret = EXCLUDED.totp_secret,
+                          is_enabled = false, is_verified = false, last_used_at = NULL
+            """,
+            (body.username, secret),
+        )
+        conn.commit()
+        _audit(conn, "MFA_SETUP_INITIATED", body.username, body.username, {"ip": request.client.host})
+        cur.close()
+        return {"secret": secret, "otpauth_uri": otpauth_uri}
+    finally:
+        release(conn)
+
+
+@router.post("/mfa/verify-setup")
+async def mfa_verify_setup(body: MFAVerifySetupRequest, request: Request):
+    token_data = _resolve_auth_identity(body.session_token, request)
+    if token_data.username != body.username:
+        raise HTTPException(status_code=401, detail="Username mismatch")
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT totp_secret FROM mfa_config WHERE username = %s AND is_enabled = false",
+            (body.username,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="No pending MFA enrollment (already configured)")
+
+        secret = row[0] if isinstance(row, tuple) else row.get("totp_secret")
+        totp = pyotp.TOTP(secret)
+        if not totp.verify(body.totp_code.strip(), valid_window=1):
+            raise HTTPException(status_code=401, detail="Invalid or expired code")
+
+        # Activate
+        cur.execute(
+            "UPDATE mfa_config SET is_enabled=true, is_verified=true, enabled_at=now() WHERE username=%s",
+            (body.username,),
+        )
+
+        # Fetch role + tenant for full token
+        cur.execute(
+            "SELECT role, tenant_id::text FROM uw_user WHERE username = %s",
+            (body.username,),
+        )
+        u = cur.fetchone()
+        role = (u[0] if isinstance(u, tuple) else u.get("role")) if u else "viewer"
+        tenant_id = (u[1] if isinstance(u, tuple) else u.get("tenant_id")) if u else None
+
+        cur.execute("UPDATE mfa_config SET last_used_at = now() WHERE username=%s", (body.username,))
+        token = _make_token(body.username, role, tenant_id)
+        _update_last_login(conn, body.username)
+        _audit(conn, "MFA_ENROLLMENT_COMPLETED", body.username, body.username, {"ip": request.client.host})
+        conn.commit()
+        cur.close()
+        return TokenResponse(access_token=token, username=body.username, role=role, tenant_id=tenant_id)
+    finally:
+        release(conn)
+
+
+@router.post("/mfa/disable")
+async def mfa_disable(body: MFASetupRequest, request: Request):
+    """Turn off MFA for the caller's own account. Requires current session."""
+    token_data = _resolve_auth_identity(body.session_token, request)
+    if token_data.username != body.username:
+        raise HTTPException(status_code=401, detail="Username mismatch")
+
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE mfa_config SET is_enabled=false, is_verified=false WHERE username=%s",
+            (body.username,),
+        )
+        _audit(conn, "MFA_DISABLED", body.username, body.username, {"ip": request.client.host})
+        conn.commit()
+        cur.close()
+        return {"status": "mfa_disabled"}
+    finally:
+        release(conn)
+
+
 # ── Users ─────────────────────────────────────────────────────────
 
 @router.get("/users", response_model=list[UserOut])
@@ -357,6 +499,7 @@ async def get_user(username: str, current: CurrentUser):
 async def register_user(body: UserCreate, current: CurrentUser):
     if current.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Only admins can create users")
+    _validate_password_strength(body.password)
 
     # ── Tenant assignment ──────────────────────────────────────────
     if current.role == "super_admin":
@@ -500,11 +643,13 @@ async def change_role(username: str, body: dict, current: CurrentUser):
 async def reset_password(username: str, body: PasswordReset, current: CurrentUser):
     if current.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Forbidden")
+    _validate_password_strength(body.new_password)
     conn, release = _get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE uw_user SET hashed_password=%s, updated_at=now(), updated_by=%s "
+            "UPDATE uw_user SET hashed_password=%s, must_change_password=false, "
+            "updated_at=now(), updated_by=%s "
             "WHERE username=%s AND is_deleted=false",
             (_hash(body.new_password), current.username, username),
         )
@@ -746,8 +891,7 @@ async def reset_password_confirm(body: dict):
 
     if not token or not new_password:
         raise HTTPException(status_code=400, detail="token and new_password are required")
-    if len(new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    _validate_password_strength(new_password)
 
     conn, release = _get_db()
     try:
@@ -776,7 +920,8 @@ async def reset_password_confirm(body: dict):
 
         # Update password and mark token used
         cur.execute(
-            "UPDATE uw_user SET hashed_password=%s, updated_at=now(), updated_by='self_reset' "
+            "UPDATE uw_user SET hashed_password=%s, must_change_password=false, "
+            "updated_at=now(), updated_by='self_reset' "
             "WHERE username=%s AND is_deleted=false",
             (_hash(new_password), t["username"]),
         )

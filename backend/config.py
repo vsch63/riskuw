@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     smtp_tls: bool = True
     smtp_from: str = "noreply@riskuw.online"
 
+    # ── Security / MFA ─────────────────────────────────────────────
+    # When false (dev default) MFA is strictly per-user optional.
+    # Flip to true for a client to make MFA mandatory for privileged roles
+    # (admin/super_admin/underwriter/senior_underwriter/agent) at login.
+    mfa_enforced: bool = False
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"

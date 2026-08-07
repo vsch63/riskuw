@@ -120,6 +120,11 @@ def main():
 
     log.info("Worker ready — listening on queue: riskuw:jobs")
 
+    # Periodic SLA breach scan (blpop timeout=10s ⇒ ~every 60s)
+    from services.inapp_notify import check_sla_breaches
+    scan_every = 6
+    scan_ticks = 0
+
     while True:
         try:
             item = r.blpop("riskuw:jobs", timeout=10)
@@ -130,6 +135,16 @@ def main():
                     process_job(job)
                 except json.JSONDecodeError as e:
                     log.error(f"Invalid JSON in job: {e} | raw={raw[:200]}")
+            # ── Event trigger: emit SLA_BREACH notifications for overdue cases ──
+            scan_ticks += 1
+            if scan_ticks >= scan_every:
+                scan_ticks = 0
+                try:
+                    emitted = check_sla_breaches()
+                    if emitted:
+                        log.info(f"SLA scan: emitted {emitted} breach notification(s)")
+                except Exception as e:
+                    log.warning(f"SLA scan failed: {e}")
         except redis.exceptions.ConnectionError as e:
             log.error(f"Redis connection lost: {e} — reconnecting in 5s")
             time.sleep(5)

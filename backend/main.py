@@ -127,14 +127,15 @@ from routers.rules            import router as rules_router              # ← N
 from routers.premium_formula  import router as premium_formula_router
 from routers.gst_modal        import router as gst_modal_router
 from routers.members          import router as members_router
-from routers.gst_modal        import router as gst_modal_router
-from routers.members          import router as members_router    # ← NEW
 from routers.user_labels      import router as user_labels_router        # ← NEW
 from routers.ocr_extract      import router as ocr_router                   # ← OCR
 from routers.analytics        import router as analytics_router             # ← ANALYTICS
 from routers.icd10            import router as icd10_router                 # ← ICD10
 from routers.agent_portal     import router as agent_router                 # ← AGENT
 from routers.policy_admin     import router as policy_router                # ← POLICY
+from routers.formula          import router as formula_router               # ← FORMULA ENGINE (system-level)
+from routers.sar_config       import router as sar_config_router            # ← SAR CONFIG
+from routers.medical_standards import router as medical_standards_router    # ← MEDICAL STANDARDS (Phase 2)
 
 app.include_router(auth_router)
 app.include_router(products_router)
@@ -151,9 +152,10 @@ app.include_router(rules_router)                                                
 app.include_router(premium_formula_router)
 app.include_router(gst_modal_router)
 app.include_router(members_router)
-app.include_router(gst_modal_router)
-app.include_router(members_router)                                                       # ← NEW
 app.include_router(user_labels_router)                                                           # ← NEW
+app.include_router(formula_router)                                                               # ← FORMULA ENGINE
+app.include_router(sar_config_router)                                                            # ← SAR CONFIG
+app.include_router(medical_standards_router)                                                     # ← MEDICAL STANDARDS (Phase 2)
 
 # Optional: reinsurance router (stub until V002 trigger is live)
 try:
@@ -173,6 +175,12 @@ try:
     app.include_router(workbench_router)
 except ImportError:
     logger.warning("routers/workbench.py not found — Workbench endpoints disabled")
+
+try:
+    from routers.notifications import router as notifications_router
+    app.include_router(notifications_router)
+except ImportError:
+    logger.warning("routers/notifications.py not found — Notifications endpoints disabled")
 
 try:
     from routers.integrations import router as integrations_router

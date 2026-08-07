@@ -195,14 +195,78 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
         "hazardous_activity": False,
     }
 
-    # Run UW engine
+    # ── Sum-at-Risk pre-check (Phase 1/2) ─────────────────────────────
+    # The SAR engine decides first: a base benefit fully covered by a Free
+    # Cover Limit is auto-approved (STP) with no medical UW, and a
+    # cumulative-SAR escalation refers or declines the case. Non-fatal —
+    # falls through to the UW engine if SAR config is absent or errors.
+    sar = None
+    sar_decision = None  # None | APPROVED_STP | DECLINED | REFERRED
     try:
-        from services.uw_engine import run_evaluation
-        result = run_evaluation(payload, current.username, '00000000-0000-0000-0000-000000000001')
-    except ImportError:
-        raise HTTPException(500, "UW engine not available")
-    except Exception as e:
-        raise HTTPException(500, f"Evaluation failed: {str(e)}")
+        from services.sar_service import run_sar
+        _conn, _release = _get_db()
+        try:
+            sar = run_sar(
+                _conn, '00000000-0000-0000-0000-000000000001', body.product_code,
+                applicant={
+                    "applicant_ref": body.applicant_ref,
+                    "age":           body.age,
+                    "annual_salary": body.annual_income,
+                },
+                benefits=[{
+                    "_idx": 0, "benefit_code": body.product_code,
+                    "product_code": body.product_code, "benefit_type": "BASE",
+                    "face_amount": body.face_amount,
+                }],
+            )
+        finally:
+            _release(_conn)
+        if str(0) in (sar.get("auto_approve_benefit_ids") or []):
+            sar_decision = "APPROVED_STP"
+        elif sar.get("escalation") == "DECLINE":
+            sar_decision = "DECLINED"
+        elif sar.get("escalation") in ("RI_APPROVAL", "SENIOR_UW", "REFER") \
+                or sar.get("ri_approval_required"):
+            sar_decision = "REFERRED"
+    except Exception as se:
+        import logging
+        logging.getLogger("uw_platform").warning(f"Agent SAR pre-check skipped: {se}")
+
+    if sar_decision == "APPROVED_STP":
+        result = {
+            "outcome": "APPROVED_STP", "risk_class": "STANDARD",
+            "approved_premium": None, "net_debit_points": 0,
+            "rules_fired": [{"rule": "SAR_FCL_AUTO_APPROVE",
+                "reason": "Covered by Free Cover Limit — gross SAR within FCL, no medical underwriting required"}],
+            "sar": sar,
+        }
+    elif sar_decision == "DECLINED":
+        result = {
+            "outcome": "DECLINED", "risk_class": "DECLINE",
+            "approved_premium": None, "net_debit_points": 0,
+            "rules_fired": [{"rule": "SAR_CUMULATIVE_DECLINE",
+                "reason": "Cumulative Sum-at-Risk across existing policies + this proposal exceeds the decline threshold"}],
+            "sar": sar,
+        }
+    elif sar_decision == "REFERRED":
+        result = {
+            "outcome": "REFERRED", "risk_class": "REFERRED",
+            "approved_premium": None, "net_debit_points": 0,
+            "rules_fired": [{"rule": "SAR_ESCALATION",
+                "reason": f"Cumulative SAR escalation: {sar.get('escalation') or 'RI_APPROVAL'}"}],
+            "sar": sar,
+        }
+    else:
+        # Run UW engine
+        try:
+            from services.uw_engine import run_evaluation
+            result = run_evaluation(payload, current.username, '00000000-0000-0000-0000-000000000001')
+        except ImportError:
+            raise HTTPException(500, "UW engine not available")
+        except Exception as e:
+            raise HTTPException(500, f"Evaluation failed: {str(e)}")
+        if sar:
+            result["sar"] = sar
 
     # Persist decision
     from routers.underwriting import _persist_decision, _persist_to_queue
@@ -261,6 +325,8 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
         "outcome":        result.get("outcome"),
         "risk_class":     result.get("risk_class"),
         "approved_premium": result.get("approved_premium"),
+        "sar":              result.get("sar"),
+        "medical_requirements": (result.get("sar") or {}).get("medical_requirements", []),
         "message": {
             "APPROVED_STP": "✅ Proposal approved! Policy will be issued shortly.",
             "APPROVED":     "✅ Proposal approved with rating.",

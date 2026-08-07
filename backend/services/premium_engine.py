@@ -181,6 +181,31 @@ class PremiumEngine:
         if ptype == "AGE":
             return float(applicant.get("age") or 0)
 
+        # System-level additions (V025) — shared across premium/FCL/SAR.
+        if ptype == "ANNUAL_SALARY":
+            return float(applicant.get("annual_salary") or 0)
+
+        if ptype == "SCHEME_MEMBER_COUNT":
+            return float(applicant.get("scheme_member_count") or 0)
+
+        if ptype == "POLICY_RESERVE":
+            return float(applicant.get("policy_reserve") or 0)
+
+        if ptype == "FUND_VALUE":
+            return float(applicant.get("fund_value") or 0)
+
+        if ptype == "EMPLOYER_CODE":
+            # Employer code is a string lookup key — must be resolved via a
+            # REFERENCE_TABLE step (EXACT match), not used as a numeric operand.
+            raise ValueError("EMPLOYER_CODE must be used via a REFERENCE_TABLE step")
+
+        if ptype == "REFERENCE_TABLE":
+            ref_table_id = step.get("reference_table_id")
+            if not ref_table_id:
+                raise ValueError("REFERENCE_TABLE step has no reference_table_id")
+            key = applicant.get(step.get("user_label") or "age")
+            return self._lookup_reference_table_value(str(ref_table_id), key)
+
         if ptype == "PREVIOUS_RESULT":
             return previous_result
 
@@ -276,6 +301,40 @@ class PremiumEngine:
         finally:
             cur.close()
 
+    def _lookup_reference_table_value(self, reference_table_id: str, key) -> float:
+        """Generic uw_reference_table lookup (V025): BAND for numeric keys,
+        EXACT for string keys. Returns 0.0 when no row matches."""
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT match_type, band_min, band_max, match_value, output_value
+                FROM uw_reference_table_row
+                WHERE reference_table_id = %s::uuid AND is_active = true
+                ORDER BY sort_order, band_min NULLS LAST
+                """,
+                (reference_table_id,),
+            )
+            for r in cur.fetchall():
+                row = dict(r) if hasattr(r, "keys") else {
+                    "match_type": r[0], "band_min": r[1], "band_max": r[2],
+                    "match_value": r[3], "output_value": r[4],
+                }
+                if row["match_type"] == "EXACT" and str(key) == str(row.get("match_value")):
+                    return float(row["output_value"])
+                if row["match_type"] == "BAND":
+                    try:
+                        nk = float(key)
+                    except (TypeError, ValueError):
+                        continue
+                    lo = float(row["band_min"]) if row.get("band_min") is not None else None
+                    hi = float(row["band_max"]) if row.get("band_max") is not None else None
+                    if (lo is None or nk >= lo) and (hi is None or nk <= hi):
+                        return float(row["output_value"])
+            return 0.0
+        finally:
+            cur.close()
+
     def _map_applicant_value(self, pname: str, applicant: dict):
         """Map parameter names to applicant field values."""
         direct = applicant.get(pname)
@@ -312,18 +371,21 @@ class PremiumEngine:
     def _get_formula(self, product_code: str, formula_type: str) -> Optional[dict]:
         cur = self.conn.cursor()
         try:
+            # System-level formula engine (V025): prefer a product-specific
+            # formula, fall back to a shared system-level formula
+            # (product_code IS NULL) for the same formula_type.
             cur.execute(
                 """
-                SELECT id, formula_name, description
-                FROM premium_formula
-                WHERE product_code = %s
-                  AND formula_type = %s
+                SELECT id, formula_name, description, product_code
+                FROM uw_formula
+                WHERE formula_type = %s
                   AND is_active = true
                   AND effective_date <= CURRENT_DATE
                   AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
-                ORDER BY effective_date DESC LIMIT 1
+                  AND (product_code = %s OR product_code IS NULL)
+                ORDER BY (product_code IS NOT NULL) DESC, effective_date DESC LIMIT 1
                 """,
-                (product_code, formula_type),
+                (formula_type, product_code),
             )
             row = cur.fetchone()
             if not row:
@@ -340,8 +402,9 @@ class PremiumEngine:
             cur.execute(
                 """
                 SELECT seq_no, description, operator, factor,
-                       parameter_type, user_value, user_label, scale_id::text
-                FROM premium_formula_step
+                       parameter_type, user_value, user_label, scale_id::text,
+                       reference_table_id::text
+                FROM uw_formula_step
                 WHERE formula_id = %s::uuid
                 ORDER BY seq_no
                 """,
@@ -349,7 +412,8 @@ class PremiumEngine:
             )
             rows = cur.fetchall()
             keys = ["seq_no","description","operator","factor",
-                    "parameter_type","user_value","user_label","scale_id"]
+                    "parameter_type","user_value","user_label","scale_id",
+                    "reference_table_id"]
             return [dict(zip(keys, r)) if isinstance(r, tuple) else dict(r) for r in rows]
         finally:
             cur.close()

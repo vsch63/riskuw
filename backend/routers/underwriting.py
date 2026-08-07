@@ -1291,6 +1291,9 @@ class BenefitLine(BaseModel):
     face_amount:       float
     coverage_term_yrs: int = 20
     premium_mode:      str = "ANNUAL"
+    # SAR inputs (optional — used by MORTALITY_PORTION / NET_AMOUNT_AT_RISK)
+    policy_reserve:    float | None = None
+    fund_value:        float | None = None
 
 
 class ProposalRequest(BaseModel):
@@ -1301,6 +1304,11 @@ class ProposalRequest(BaseModel):
     gender:        str
     state:         str = "MH"
     annual_income: float = 100000
+    # SAR / group-scheme context (optional)
+    annual_salary:        float | None = None
+    scheme_id:            str | None = None
+    scheme_member_count:  int | None = None
+    employer_code:        str | None = None
     # Medical fields — shared across all benefits
     tobacco_status:       str = "NEVER"
     heart_condition:      str = "NONE"
@@ -1374,6 +1382,36 @@ def evaluate_proposal(body: ProposalRequest, current: FlexibleAuth):
         shared = body.model_dump(exclude={"benefits"})
         shared["applicant_ref"] = body.applicant_ref
 
+        # ── Sum-at-Risk (SAR) pre-computation (Phase 1/2) ──────────────
+        # Runs the configurable SAR engine: individual SAR per benefit,
+        # risk-group aggregation, exposure-group split, FCL check. Used to
+        # auto-approve benefits fully covered by a Free Cover Limit and to
+        # surface medical requirements from the NML bands. Non-fatal — if
+        # SAR config is missing/errors, proposal evaluation proceeds as today.
+        sar           = None
+        sar_benefits  = []
+        proposal_id   = None
+        try:
+            from services.sar_service import run_sar
+            sar_benefits = [
+                {**benefit.model_dump(), "_idx": i}
+                for i, benefit in enumerate(body.benefits)
+            ]
+            sar = run_sar(
+                conn, str(current.tenant_id), base.product_code,
+                applicant={
+                    "applicant_ref": body.applicant_ref,
+                    "age":           body.age,
+                    "annual_salary": body.annual_salary,
+                },
+                benefits=sar_benefits,
+                scheme_id=body.scheme_id,
+                scheme_member_count=body.scheme_member_count,
+                employer_code=body.employer_code,
+            )
+        except Exception as se:
+            logger.warning(f"SAR computation failed (non-fatal): {se}")
+
         benefit_results = []
         base_outcome    = None
         base_debits     = 0
@@ -1394,6 +1432,81 @@ def evaluate_proposal(body: ProposalRequest, current: FlexibleAuth):
 
             # Cross-benefit rule: if BASE was DECLINED, all riders are declined (linked)
             linked_decline = False
+
+            # SAR: benefit whose exposure bucket is fully covered by a Free
+            # Cover Limit (excess SAR = 0) is auto-approved without running
+            # the medical rules engine (SAR pipeline step 5 + 9).
+            if sar and str(i) in (sar.get("auto_approve_benefit_ids") or []):
+                benefit_results.append({
+                    "benefit_type":     benefit.benefit_type,
+                    "product_code":     benefit.product_code,
+                    "face_amount":      benefit.face_amount,
+                    "outcome":          "APPROVED_STP",
+                    "risk_class":       "STANDARD",
+                    "net_debit_points": 0,
+                    "annual_premium":   None,
+                    "rules_fired":      [{
+                        "rule":   "SAR_FCL_AUTO_APPROVE",
+                        "reason": "Covered by Free Cover Limit — gross SAR within FCL, no medical underwriting required",
+                    }],
+                    "exclusions":       None,
+                    "linked_decline":   False,
+                    "processing_ms":    0,
+                    "sar_auto_approve": True,
+                })
+                if is_base:
+                    base_outcome = "APPROVED_STP"
+                continue
+
+            # SAR cumulative escalation (Phase 3, V029): a cumulative-SAR
+            # decision overrides the per-benefit engine result for benefits
+            # NOT already covered by a Free Cover Limit (excess SAR > 0).
+            #   DECLINE     -> benefit declined (cumulative SAR over the cap)
+            #   RI_APPROVAL / ri_approval_required -> referred to reinsurer
+            #   SENIOR_UW   -> escalated to senior underwriter
+            #   REFER       -> auto-referred to a human underwriter
+            sar_esc = (sar or {}).get("escalation")
+            sar_ri  = (sar or {}).get("ri_approval_required", False)
+            if sar_esc == "DECLINE":
+                benefit_results.append({
+                    "benefit_type":     benefit.benefit_type,
+                    "product_code":     benefit.product_code,
+                    "face_amount":      benefit.face_amount,
+                    "outcome":          "DECLINED",
+                    "risk_class":       "DECLINE",
+                    "net_debit_points": 0,
+                    "annual_premium":   None,
+                    "rules_fired":      [{"rule": "SAR_CUMULATIVE_DECLINE",
+                        "reason": "Cumulative Sum-at-Risk across existing policies + this proposal exceeds the decline threshold"}],
+                    "exclusions":       None,
+                    "linked_decline":   True,
+                    "processing_ms":    0,
+                    "sar_escalation":   "DECLINE",
+                })
+                if is_base:
+                    base_outcome = "DECLINED"
+                continue
+            if sar_esc in ("RI_APPROVAL", "SENIOR_UW", "REFER") or sar_ri:
+                _esc_label = "RI approval required" if (sar_esc == "RI_APPROVAL" or sar_ri) else ("Senior UW review required" if sar_esc == "SENIOR_UW" else "Auto-refer (cumulative SAR)")
+                _esc_rule  = "SAR_RI_APPROVAL" if (sar_esc == "RI_APPROVAL" or sar_ri) else ("SAR_SENIOR_UW" if sar_esc == "SENIOR_UW" else "SAR_AUTO_REFER")
+                benefit_results.append({
+                    "benefit_type":     benefit.benefit_type,
+                    "product_code":     benefit.product_code,
+                    "face_amount":      benefit.face_amount,
+                    "outcome":          "REFERRED",
+                    "risk_class":       "REFERRED",
+                    "net_debit_points": 0,
+                    "annual_premium":   None,
+                    "rules_fired":      [{"rule": _esc_rule, "reason": _esc_label + " — cumulative Sum-at-Risk over the configured threshold"}],
+                    "exclusions":       None,
+                    "linked_decline":   False,
+                    "processing_ms":    0,
+                    "sar_escalation":   sar_esc or "RI_APPROVAL",
+                })
+                if is_base:
+                    base_outcome = "REFERRED"
+                continue
+
             if not is_base and base_outcome and "DECLIN" in base_outcome:
                 result_row = {
                     "benefit_type":     benefit.benefit_type,
@@ -1458,7 +1571,8 @@ def evaluate_proposal(body: ProposalRequest, current: FlexibleAuth):
 
             outcome          = uw_result.get("outcome", "ERROR")
             net_debits       = uw_result.get("net_debit_points", 0)
-            annual_premium   = uw_result.get("approved_premium") or uw_result.get("premium_detail", {}).get("annual_premium")
+            _prem_detail     = uw_result.get("premium_detail") or {}
+            annual_premium   = uw_result.get("approved_premium") or _prem_detail.get("annual_premium")
             processing_ms    = int((time.time() - t0) * 1000)
 
             # Track base outcome/debits for cross-benefit rules
@@ -1573,6 +1687,19 @@ def evaluate_proposal(body: ProposalRequest, current: FlexibleAuth):
             logger.warning(f"Proposal persistence failed: {pe}")
             conn.rollback()
 
+        # Persist the SAR breakdown now that the proposal row exists
+        # (best-effort; never fails the proposal evaluation).
+        if sar and sar.get("configured") and proposal_id:
+            try:
+                from services.sar_service import persist_sar
+                if persist_sar(conn, str(current.tenant_id), str(proposal_id), sar, sar_benefits):
+                    conn.commit()
+                else:
+                    conn.rollback()
+            except Exception as _sar_err:
+                logger.warning(f"SAR result persistence skipped: {_sar_err}")
+                conn.rollback()
+
         # Send ONE consolidated email covering all benefits
         try:
             from services.notification import send_proposal_decision_email
@@ -1615,6 +1742,12 @@ def evaluate_proposal(body: ProposalRequest, current: FlexibleAuth):
             "total_annual_premium": round(total_premium, 2),
             "benefits":            benefit_results,
             "benefit_count":       len(benefit_results),
+            # Sum-at-Risk breakdown (Phase 1/2): per-benefit + per-risk-group
+            # + per-exposure-group SAR, FCL applied, excess SAR, and NML
+            # medical requirements. None when SAR config is absent.
+            "sar":                 sar,
+            "sar_escalation":      (sar or {}).get("escalation"),
+            "medical_requirements": (sar or {}).get("medical_requirements", []),
             "evaluated_at":        __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         }
 

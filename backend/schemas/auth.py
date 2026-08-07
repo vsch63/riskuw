@@ -16,6 +16,17 @@ class MFAVerifyRequest(BaseModel):
     username: str
     session_token: str | None = None
 
+
+class MFASetupRequest(BaseModel):
+    username: str
+    session_token: str  # MFA session token from login (5-min window)
+
+
+class MFAVerifySetupRequest(BaseModel):
+    username: str
+    session_token: str
+    totp_code: str
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -26,6 +37,8 @@ class TokenResponse(BaseModel):
     tenant_name: str | None = None     # ← added
     mfa_required: bool = False
     mfa_session_token: str | None = None
+    mfa_enrollment_required: bool = False  # true → client must show the TOTP enrollment UI
+    password_change_required: bool = False   # true → client must force a password change
 
 class UserCreate(BaseModel):
     username: str

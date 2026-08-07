@@ -34,6 +34,31 @@ def _get_db():
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
+def _join_terms(v):
+    """Term lists (years) are stored comma-joined in the TEXT columns."""
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        return ",".join(str(x) for x in v)
+    return v
+
+
+def _log(conn, current, entity_type: str, entity_id: str, event_type: str,
+         after: dict | None = None, before: dict | None = None) -> None:
+    """Record a CONFIG change in the audit trail. Silent on failure."""
+    try:
+        from services.audit import log_event
+        log_event(
+            conn, event_category="CONFIG", event_type=event_type,
+            actor_username=current.username, actor_role=current.role,
+            tenant_id=str(current.tenant_id),
+            entity_type=entity_type, entity_id=entity_id,
+            entity_ref=entity_id, before_state=before, after_state=after,
+        )
+    except Exception:
+        pass
+
+
 class ProductCreate(BaseModel):
     product_code:           str
     product_name:           str
@@ -216,7 +241,8 @@ def create_product(body: ProductCreate, current: CurrentUser):
             body.product_code.upper(), body.product_name, body.product_type,
             body.category, body.uw_method,
             body.min_age, body.max_age, body.min_face_amount, body.max_face_amount,
-            body.available_terms, body.benefit_terms, body.premium_terms,
+            _join_terms(body.available_terms), _join_terms(body.benefit_terms),
+            _join_terms(body.premium_terms),
             body.exam_required, body.non_medical_limit, body.reinsurance_threshold,
             body.max_issue_age, body.stp_threshold, body.refer_threshold, body.decline_threshold,
             body.is_guaranteed_issue, body.is_group_product, body.is_active,
@@ -226,6 +252,13 @@ def create_product(body: ProductCreate, current: CurrentUser):
         row = cur.fetchone()
         conn.commit()
         cur.close()
+        _log(conn, current, "products", body.product_code.upper(), "product.create",
+             after={"product_name": body.product_name, "min_age": body.min_age,
+                    "max_age": body.max_age, "min_face_amount": body.min_face_amount,
+                    "max_face_amount": body.max_face_amount,
+                    "stp_threshold": body.stp_threshold,
+                    "refer_threshold": body.refer_threshold,
+                    "decline_threshold": body.decline_threshold})
         return dict(row)
     finally:
         release(conn)
@@ -245,8 +278,8 @@ def get_product_formula_labels(code: str, current: CurrentUser):
                    COALESCE(ul.default_value, s.user_value::text) AS default_value,
                    ul.prefix, ul.suffix,
                    COALESCE(ul.description, s.description) AS description
-            FROM premium_formula_step s
-            JOIN premium_formula f ON f.id = s.formula_id
+            FROM uw_formula_step s
+            JOIN uw_formula f ON f.id = s.formula_id
             LEFT JOIN system_user_label ul ON ul.label_key = s.user_label
             WHERE f.product_code = %s
               AND f.formula_type = 'BASE_PREMIUM'
@@ -290,6 +323,10 @@ def update_product(code: str, body: ProductUpdate, current: CurrentUser):
         # If a string field receives a non-string (e.g. False from unset Select), skip it
         if k in STRING_FIELDS and not isinstance(v, str):
             continue
+        # Term lists → comma-joined text for the TEXT columns
+        if k in ("available_terms", "benefit_terms", "premium_terms"):
+            updates[k] = _join_terms(v)
+            continue
         updates[k] = v
     if not updates:
         raise HTTPException(400, "No fields to update")
@@ -323,6 +360,8 @@ def update_product(code: str, body: ProductUpdate, current: CurrentUser):
         cur.close()
         if not row:
             raise HTTPException(404, f"Product '{code}' not found")
+        _log(conn, current, "products", code.upper(), "product.update",
+             after={k: v for k, v in updates.items()})
         return {"status": "updated", "product_code": code.upper()}
     except HTTPException:
         raise

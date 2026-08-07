@@ -66,13 +66,18 @@ def _get_thresholds(product_code: str) -> dict:
 
 
 def _get_product(product_code: str) -> dict:
+    # The live catalog table is `products` (routers/products.py, single-benefit
+    # evaluation in underwriting.py). A previous copy read the legacy `product`
+    # table which no code writes to, so product eligibility checks silently
+    # fell back to defaults. Fixed to read the live table with its column names.
     try:
         from database import get_conn, release_conn
         conn = get_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT min_age, max_age, min_face, max_face, is_gi "
-            "FROM product WHERE product_code=%s AND is_active=true LIMIT 1",
+            "SELECT min_age, max_age, min_face_amount AS min_face, "
+            "max_face_amount AS max_face, is_guaranteed_issue AS is_gi "
+            "FROM products WHERE product_code=%s AND is_active=true LIMIT 1",
             (product_code,),
         )
         row = cur.fetchone()
@@ -96,6 +101,414 @@ def _g(d: dict, *keys, default=None):
         else:
             return default
     return d if d is not None else default
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data-driven underwriting standards (Phase 2)
+#
+# The R001–R080 catalogue is loaded from uw_medical_standard /
+# _standard_rule / _standard_range (V034). Rules are evaluated against a flat
+# context built from the payload (nested dicts flattened to dotted keys plus
+# derived fields: bmi, chol_hdl_ratio, coverage_multiple, ...). Conditions are
+# the typed condition tree the formula engine evaluates. When the DB has no
+# rows (or is unavailable — the pure unit path), the built-in catalogue below
+# mirrors the V034 system seed exactly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BUILTIN_STANDARDS = [
+    {
+        "code": "R001", "family": "Age", "name": "Age loading", "category": "AGE",
+        "rules": [{
+            "rule_type": "RANGE", "param": "age", "name": "Age loading",
+            "description": "Age {age}", "ranges": [
+                {"min_value": 61, "max_value": None, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Age loading 61+", "description": "Age {age}", "debit_points": 40},
+                {"min_value": 56, "max_value": 60, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Age loading 56–60", "description": "Age {age}", "debit_points": 25},
+                {"min_value": 46, "max_value": 55, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Age loading 46–55", "description": "Age {age}", "debit_points": 15},
+            ],
+        }],
+    },
+    {
+        "code": "R005", "family": "Tobacco", "name": "Tobacco use", "category": "TOBACCO",
+        "rules": [
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "tobacco_status", "op": "IN", "value": ["SMOKER"]}], "logic": "AND"},
+             "name": "Current smoker", "debit_points": 75},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "tobacco_status", "op": "IN", "value": ["CIGAR", "PIPE"]}], "logic": "AND"},
+             "name": "Cigar/pipe user", "debit_points": 50},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "tobacco_status", "op": "IN", "value": ["CHEW", "VAPE"]}], "logic": "AND"},
+             "name": "Smokeless/vape tobacco", "debit_points": 50},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "tobacco_status", "op": "EQ", "value": "NON_SMOKER"}, {"field": "tobacco_quit_years", "op": "LT", "value": 1}], "logic": "AND"},
+             "name": "Recent tobacco cessation <1yr", "debit_points": 50},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "tobacco_status", "op": "EQ", "value": "NON_SMOKER"}, {"field": "tobacco_quit_years", "op": "GTE", "value": 1}, {"field": "tobacco_quit_years", "op": "LT", "value": 2}], "logic": "AND"},
+             "name": "Tobacco cessation 1–2yr", "debit_points": 25},
+        ],
+    },
+    {
+        "code": "R010", "family": "Build", "name": "Body mass index", "category": "BUILD",
+        "rules": [{
+            "rule_type": "RANGE", "param": "bmi", "name": "Body mass index", "description": "BMI {bmi:.1f}",
+            "ranges": [
+                {"min_value": 40, "max_value": None, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Severe obesity BMI ≥40", "description": "BMI {bmi:.1f}", "debit_points": 100,
+                 "requires_aps": True, "aps_reason": "Severe obesity — APS required"},
+                {"min_value": 35, "max_value": 39.9, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Obesity BMI 35–39.9", "description": "BMI {bmi:.1f}", "debit_points": 75},
+                {"min_value": 30, "max_value": 34.9, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Overweight BMI 30–34.9", "description": "BMI {bmi:.1f}", "debit_points": 25},
+                {"min_value": None, "max_value": 16.99, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Underweight BMI <17", "description": "BMI {bmi:.1f}", "debit_points": 50,
+                 "requires_aps": True, "aps_reason": "Underweight — APS required"},
+            ],
+        }],
+    },
+    {
+        "code": "R015", "family": "Diabetes", "name": "Diabetes / A1c", "category": "DIABETES",
+        "rules": [
+            {"rule_type": "RANGE", "condition": {"clauses": [{"field": "diabetes_type", "op": "EQ", "value": "TYPE1"}], "logic": "AND"},
+             "param": "a1c", "name": "Type 1 diabetes A1c={a1c}%",
+             "requires_aps": True, "aps_reason": "Type 1 diabetes — APS and latest labs required",
+             "ranges": [
+                 {"min_value": None, "max_value": 7.5, "min_exclusive": False, "max_exclusive": False, "name": "T1 A1c ≤7.5", "debit_points": 75},
+                 {"min_value": 7.5, "max_value": 9, "min_exclusive": False, "max_exclusive": False, "name": "T1 A1c 7.5–9", "debit_points": 100},
+                 {"min_value": 9, "max_value": None, "min_exclusive": True, "max_exclusive": False, "name": "T1 A1c >9", "debit_points": 150},
+             ]},
+            {"rule_type": "RANGE", "condition": {"clauses": [{"field": "diabetes_type", "op": "EQ", "value": "TYPE2"}], "logic": "AND"},
+             "param": "a1c", "name": "Type 2 diabetes A1c={a1c}%",
+             "ranges": [
+                 {"min_value": None, "max_value": 7.5, "min_exclusive": False, "max_exclusive": False, "name": "T2 A1c ≤7.5", "debit_points": 25},
+                 {"min_value": 7.5, "max_value": 9, "min_exclusive": False, "max_exclusive": False, "name": "T2 A1c 7.5–9", "debit_points": 50},
+                 {"min_value": 9, "max_value": None, "min_exclusive": True, "max_exclusive": False, "name": "T2 A1c >9", "debit_points": 75},
+             ]},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "diabetes_type", "op": "EQ", "value": "TYPE2"}, {"field": "diabetes_duration_years", "op": "GT", "value": 10}], "logic": "AND"},
+             "name": "Type 2 diabetes duration >10yr", "debit_points": 25},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "diabetes_type", "op": "EQ", "value": "PRE_DIABETIC"}], "logic": "AND"},
+             "name": "Pre-diabetic", "debit_points": 15},
+        ],
+    },
+    {
+        "code": "R020", "family": "Cardiac", "name": "Cardiac history", "category": "CARDIAC",
+        "rules": [
+            {"rule_type": "RANGE", "condition": {"clauses": [{"field": "heart_condition", "op": "EQ", "value": "MI"}], "logic": "AND"},
+             "param": "heart_event_years_ago", "name": "Myocardial infarction {heart_event_years_ago}yr ago",
+             "requires_aps": True, "aps_reason": "Post-MI — full cardiac APS required",
+             "ranges": [
+                 {"min_value": None, "max_value": 2, "min_exclusive": False, "max_exclusive": False, "name": "Post-MI <2yr", "debit_points": 150},
+                 {"min_value": 2, "max_value": 5, "min_exclusive": False, "max_exclusive": False, "name": "Post-MI 2–5yr", "debit_points": 100},
+                 {"min_value": 5, "max_value": None, "min_exclusive": False, "max_exclusive": False, "name": "Post-MI >5yr", "debit_points": 50},
+             ]},
+            {"rule_type": "RANGE", "condition": {"clauses": [{"field": "heart_condition", "op": "IN", "value": ["CABG", "STENT"]}], "logic": "AND"},
+             "param": "heart_event_years_ago", "name": "{heart_condition} {heart_event_years_ago}yr ago",
+             "requires_aps": True, "aps_reason": "Post cardiac procedure — APS required",
+             "ranges": [
+                 {"min_value": None, "max_value": 2, "min_exclusive": False, "max_exclusive": False, "name": "Post-procedure <2yr", "debit_points": 125},
+                 {"min_value": 2, "max_value": 5, "min_exclusive": False, "max_exclusive": False, "name": "Post-procedure 2–5yr", "debit_points": 75},
+                 {"min_value": 5, "max_value": None, "min_exclusive": False, "max_exclusive": False, "name": "Post-procedure >5yr", "debit_points": 40},
+             ]},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "heart_condition", "op": "EQ", "value": "ANGINA"}], "logic": "AND"},
+             "name": "Angina", "debit_points": 75},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "heart_condition", "op": "EQ", "value": "ARRHYTHMIA"}], "logic": "AND"},
+             "name": "Arrhythmia", "debit_points": 50},
+        ],
+    },
+    {
+        "code": "R030", "family": "Medical", "name": "Medical history", "category": "MEDICAL",
+        "rules": [
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "depression_history", "op": "EQ", "value": True}, {"field": "depression_hospitalized", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "Depression history (hospitalised)", "debit_points": 75},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "depression_history", "op": "EQ", "value": True}, {"field": "depression_hospitalized", "op": "NOT_IN", "value": [True]}], "logic": "AND"},
+             "name": "Depression history", "debit_points": 30},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "epilepsy", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "Epilepsy / seizure disorder", "debit_points": 50, "requires_aps": True, "aps_reason": "Epilepsy — neurology APS required"},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "copd", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "COPD", "debit_points": 50, "requires_aps": True, "aps_reason": "COPD — pulmonary APS required"},
+        ],
+    },
+    {
+        "code": "R040", "family": "Alcohol", "name": "Alcohol use", "category": "LIFESTYLE",
+        "rules": [{
+            "rule_type": "RANGE", "param": "alcohol_drinks_week", "name": "Alcohol use",
+            "ranges": [
+                {"min_value": 28, "max_value": None, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Heavy alcohol use ≥28 units/week", "description": "{alcohol_drinks_week} units/wk", "debit_points": 75},
+                {"min_value": 21, "max_value": 27, "min_exclusive": False, "max_exclusive": False,
+                 "name": "Moderate-heavy alcohol use 21–27 units/week", "debit_points": 40},
+            ],
+        }],
+    },
+    {
+        "code": "R045", "family": "Hazardous", "name": "Hazardous activities", "category": "LIFESTYLE",
+        "rules": [
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "hazardous_activity", "op": "EQ", "value": True}, {"field": "hazard_types", "op": "CONTAINS_ANY", "value": ["BASE_JUMPING", "MOTOR_RACING", "PRIVATE_PILOT"]}], "logic": "AND"},
+             "name": "Hazardous activity flat extra (high)", "description": "Activities: {hazard_types}", "debit_points": 50},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "hazardous_activity", "op": "EQ", "value": True}, {"field": "hazard_types", "op": "NOT_CONTAINS_ANY", "value": ["BASE_JUMPING", "MOTOR_RACING", "PRIVATE_PILOT"]}], "logic": "AND"},
+             "name": "Hazardous activity flat extra", "description": "Activities: {hazard_types}", "debit_points": 30},
+        ],
+    },
+    {
+        "code": "R050", "family": "Family History", "name": "Family history", "category": "FAMILY_HISTORY",
+        "rules": [
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "family_history.cardiovascular_before_60", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "Family history CVD before age 60", "debit_points": 15},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "family_history.stroke_before_65", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "Family history stroke before age 65", "debit_points": 10},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "family_history.cancer_history", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "Family history cancer", "debit_points": 10},
+        ],
+    },
+    {
+        "code": "R055", "family": "Occupation", "name": "Occupation class", "category": "OCCUPATION",
+        "rules": [
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "occupation_class", "op": "EQ", "value": "2"}], "logic": "AND"},
+             "name": "Occupation class 2", "debit_points": 10},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "occupation_class", "op": "EQ", "value": "3"}], "logic": "AND"},
+             "name": "Occupation class 3", "debit_points": 25},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "occupation_class", "op": "EQ", "value": "4"}], "logic": "AND"},
+             "name": "Occupation class 4", "debit_points": 50},
+        ],
+    },
+    {
+        "code": "R060", "family": "Driving", "name": "Driving record", "category": "DRIVING",
+        "rules": [
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "license_suspended", "op": "EQ", "value": True}], "logic": "AND"},
+             "name": "Licence suspended", "debit_points": 100},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "dui_dwi_count_5yr", "op": "EQ", "value": 1}], "logic": "AND"},
+             "name": "1 DUI/DWI in last 5 years", "debit_points": 50},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "major_violations_3yr", "op": "GTE", "value": 3}], "logic": "AND"},
+             "name": "{major_violations_3yr} major driving violations in last 3 years", "debit_points": 50},
+            {"rule_type": "FLAT", "condition": {"clauses": [{"field": "major_violations_3yr", "op": "EQ", "value": 2}], "logic": "AND"},
+             "name": "2 major driving violations in last 3 years", "debit_points": 25},
+        ],
+    },
+    {
+        "code": "R070", "family": "Financial", "name": "Coverage-to-income", "category": "FINANCIAL",
+        "rules": [{
+            "rule_type": "RANGE", "param": "coverage_multiple", "name": "Financial underwriting — coverage exceeds 20× income",
+            "description": "Total coverage {total_coverage:,.0f} vs max {max_coverage:,.0f}",
+            "ranges": [
+                {"min_value": 20, "max_value": None, "min_exclusive": True, "max_exclusive": False,
+                 "name": "Financial underwriting — coverage exceeds 20× income", "debit_points": 30,
+                 "requires_aps": True, "aps_reason": "Excess coverage — financial justification required"},
+            ],
+        }],
+    },
+    {
+        "code": "R080", "family": "Labs", "name": "Lab values", "category": "LABS",
+        "rules": [
+            {"rule_type": "RANGE", "param": "total_cholesterol", "name": "Total cholesterol",
+             "ranges": [{"min_value": 260, "max_value": None, "min_exclusive": False, "max_exclusive": False,
+                         "name": "High total cholesterol {total_cholesterol} mg/dL", "debit_points": 25}]},
+            {"rule_type": "RANGE", "param": "chol_hdl_ratio", "name": "Cholesterol ratio",
+             "ranges": [{"min_value": 6, "max_value": None, "min_exclusive": True, "max_exclusive": False,
+                         "name": "High cholesterol ratio {chol_hdl_ratio:.1f}", "debit_points": 25}]},
+            {"rule_type": "RANGE", "param": "ldl", "name": "LDL cholesterol",
+             "ranges": [{"min_value": 190, "max_value": None, "min_exclusive": False, "max_exclusive": False,
+                         "name": "Very high LDL {ldl} mg/dL", "debit_points": 25}]},
+        ],
+    },
+]
+
+
+def _cond_ok(condition, context) -> bool:
+    """Evaluate a typed condition tree against the flat context. Reuses the
+    formula engine's evaluator (stateless) so ops stay in one place."""
+    from services.sar_engine import FormulaEngine
+    try:
+        return bool(FormulaEngine()._eval_condition(condition, context))
+    except Exception:
+        return False
+
+
+def _fmt_template(tpl, context) -> str:
+    """Resolve {field} / {field:.1f} templates against the context. Lists are
+    joined with ', '. Malformed templates return the raw string."""
+    if not tpl or "{" not in tpl:
+        return tpl or ""
+    vals = {}
+    for k, v in context.items():
+        vals[k] = ", ".join(str(x) for x in v) if isinstance(v, (list, tuple)) else v
+    try:
+        return tpl.format(**vals)
+    except Exception:
+        return tpl
+
+
+def _band_match(ranges, value) -> dict | None:
+    """First matching band wins (V034 seed relies on this for the a1c >9 vs
+    7.5–9 edge). min/max inclusive unless the *_exclusive flags are set."""
+    for rng in ranges:
+        lo, hi = rng.get("min_value"), rng.get("max_value")
+        lo_ok = True
+        if lo is not None:
+            lo_ok = value > float(lo) if rng.get("min_exclusive") else value >= float(lo)
+        hi_ok = True
+        if hi is not None:
+            hi_ok = value < float(hi) if rng.get("max_exclusive") else value <= float(hi)
+        if lo_ok and hi_ok:
+            return rng
+    return None
+
+
+def _load_standards(tenant_id, product_code) -> list[dict]:
+    """Load effective standards for (tenant, product) — most-specific scope
+    wins per standard_code; falls back to the built-in catalogue when the DB
+    is unavailable or has no rows (pure unit path)."""
+    try:
+        from database import get_conn, release_conn
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT s.standard_code, s.family, s.name, s.category,
+                   (s.tenant_id IS NOT NULL) AS tenant_scoped,
+                   (s.product_code IS NOT NULL) AS product_scoped,
+                   r.id AS rule_id, r.rule_type, r.param, r.condition,
+                   r.name AS rule_name, r.description AS rule_desc,
+                   r.debit_points AS rule_debit, r.credit_points AS rule_credit,
+                   r.rating_class AS rule_rating, r.requires_aps AS rule_aps,
+                   r.aps_reason AS rule_aps_reason, r.seq AS rule_seq,
+                   rg.min_value, rg.max_value, rg.min_exclusive, rg.max_exclusive,
+                   rg.name AS band_name, rg.description AS band_desc,
+                   rg.debit_points AS band_debit, rg.credit_points AS band_credit,
+                   rg.requires_aps AS band_aps, rg.aps_reason AS band_aps_reason,
+                   rg.seq AS band_seq
+            FROM uw_medical_standard s
+            JOIN uw_medical_standard_rule r ON r.standard_id = s.id
+            LEFT JOIN uw_medical_standard_range rg ON rg.rule_id = r.id
+            WHERE s.is_active = true
+              AND s.effective_date <= CURRENT_DATE
+              AND (s.expiry_date IS NULL OR s.expiry_date >= CURRENT_DATE)
+              AND (s.tenant_id = %s::uuid OR s.tenant_id IS NULL)
+              AND (s.product_code = %s OR s.product_code IS NULL)
+            ORDER BY s.family, s.standard_code, r.seq, rg.seq
+        """, (tenant_id, product_code))
+        rows = cur.fetchall()
+        cur.close()
+        release_conn(conn)
+        if rows:
+            return _merge_standards(rows)
+    except Exception as exc:
+        logger.warning("Could not load medical standards from DB — using built-ins", exc_info=exc)
+    return _BUILTIN_STANDARDS
+
+
+def _merge_standards(rows) -> list[dict]:
+    """Group DB rows into standards; per standard_code keep only the most
+    specific scope (tenant+product > tenant > product > system)."""
+    from collections import OrderedDict
+    # key rows by standard_code, tracking per-code best scope
+    per_code: dict[str, list] = OrderedDict()
+    best_scope: dict[str, tuple[int, int]] = {}
+    for r in rows:
+        d = dict(r) if hasattr(r, "keys") else dict(zip(
+            ["standard_code", "family", "name", "category", "tenant_scoped", "product_scoped",
+             "rule_id", "rule_type", "param", "condition", "rule_name", "rule_desc",
+             "rule_debit", "rule_credit", "rule_rating", "rule_aps", "rule_aps_reason",
+             "rule_seq", "min_value", "max_value", "min_exclusive", "max_exclusive",
+             "band_name", "band_desc", "band_debit", "band_credit", "band_aps",
+             "band_aps_reason", "band_seq"], r))
+        code = d["standard_code"]
+        scope = (2 if d["tenant_scoped"] else 0) + (1 if d["product_scoped"] else 0)
+        if code not in best_scope or scope > best_scope[code]:
+            best_scope[code] = scope
+        per_code.setdefault(code, []).append(d)
+    standards = []
+    for code, entries in per_code.items():
+        top = best_scope[code]
+        chosen = [e for e in entries
+                  if (2 if e["tenant_scoped"] else 0) + (1 if e["product_scoped"] else 0) == top]
+        standards.append(_assemble_standard(chosen[0], chosen))
+    standards.sort(key=lambda s: s["code"])
+    return standards
+
+
+def _assemble_standard(first, rows) -> dict:
+    from collections import OrderedDict
+    std = {"code": first["standard_code"], "family": first["family"],
+           "name": first["name"], "category": first["category"], "rules": []}
+    rules: OrderedDict = OrderedDict()
+    for d in rows:
+        rid = d["rule_id"]
+        if rid not in rules:
+            rules[rid] = {
+                "rule_type": d["rule_type"], "param": d["param"],
+                "condition": d["condition"], "name": d["rule_name"],
+                "description": d["rule_desc"], "debit_points": d["rule_debit"],
+                "credit_points": d["rule_credit"], "rating_class": d["rule_rating"],
+                "requires_aps": d["rule_aps"], "aps_reason": d["rule_aps_reason"],
+                "seq": d["rule_seq"], "ranges": [],
+            }
+        if d["band_seq"] is not None:
+            rules[rid]["ranges"].append({
+                "min_value": d["min_value"], "max_value": d["max_value"],
+                "min_exclusive": d["min_exclusive"], "max_exclusive": d["max_exclusive"],
+                "name": d["band_name"], "description": d["band_desc"],
+                "debit_points": d["band_debit"], "credit_points": d["band_credit"],
+                "requires_aps": d["band_aps"], "aps_reason": d["band_aps_reason"],
+                "seq": d["band_seq"],
+            })
+    std["rules"] = sorted(rules.values(), key=lambda r: r["seq"])
+    for rule in std["rules"]:
+        rule["ranges"].sort(key=lambda b: b["seq"])
+    return std
+
+
+def _build_context(payload: dict) -> dict:
+    """Flatten the applicant payload into the flat context the standard
+    conditions/ranges evaluate against, plus derived fields."""
+    ctx: dict[str, Any] = {}
+    for k in ("age", "gender", "face_amount", "occupation_class", "tobacco_status",
+              "depression_history", "depression_hospitalized", "epilepsy", "copd",
+              "hazardous_activity", "hazard_types", "a1c", "diabetes_type",
+              "heart_condition", "heart_event_years_ago"):
+        if payload.get(k) is not None:
+            ctx[k] = payload[k]
+
+    build = payload.get("build") or {}
+    h = float(build.get("height_inches") or payload.get("height_inches") or 0)
+    w = float(build.get("weight_lbs") or payload.get("weight_lbs") or 0)
+    if h > 0 and w > 0:
+        ctx["bmi"] = (w / (h ** 2)) * 703
+
+    driving = payload.get("driving_record") or {}
+    for k in ("dui_dwi_count_5yr", "major_violations_3yr", "minor_violations_3yr",
+              "license_suspended"):
+        if driving.get(k) is not None:
+            ctx[k] = driving[k]
+
+    fh = payload.get("family_history") or {}
+    for k, v in fh.items():
+        if v is not None:
+            ctx[f"family_history.{k}"] = v
+
+    labs = payload.get("lab_values") or {}
+    for k in ("total_cholesterol", "hdl", "ldl"):
+        if labs.get(k) is not None:
+            ctx[k] = labs[k]
+
+    age = int(payload.get("age", 0))
+    # Defaults mirroring the legacy engine
+    ctx.setdefault("tobacco_quit_years", 0)
+    ctx.setdefault("a1c", 7.0)
+    if ctx.get("diabetes_type") == "TYPE2":
+        dx_age = int(payload.get("diabetes_dx_age") or age)
+        ctx["diabetes_duration_years"] = max(0, age - dx_age)
+
+    fin = payload.get("financial") or {}
+    income = float(fin.get("annual_income") or payload.get("annual_income") or 0)
+    existing = float(fin.get("existing_life_coverage") or payload.get("existing_coverage") or 0)
+    face = float(payload.get("face_amount") or 0)
+    if income > 0:
+        total_coverage = face + existing
+        ctx["coverage_multiple"] = total_coverage / income
+        ctx["total_coverage"] = total_coverage
+        ctx["max_coverage"] = income * 20
+
+    chol = float(labs.get("total_cholesterol") or 0)
+    hdl_v = float(labs.get("hdl") or 0)
+    if hdl_v > 0 and chol > 0:
+        ctx["chol_hdl_ratio"] = chol / hdl_v
+    return ctx
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -158,9 +571,11 @@ def run_evaluation(payload: dict, actor: str, tenant_id: str | None) -> dict:
         return _hard_decline("2 or more DUI/DWI convictions in last 5 years",
                              applicant_ref, rules_fired)
 
-    if _g(driving, "license_suspended", default=False):
-        fire("R060", "Licence suspended", 100, "DRIVING",
-             "Driving licence currently suspended")
+    # Recent MI is a postpone — hard stop below 12 months (also reflected in
+    # the R020 data, but the postpone must not accumulate other debits).
+    if payload.get("heart_condition") == "MI" and float(payload.get("heart_event_years_ago") or 0) < 1:
+        return _hard_decline("MI within last 12 months — postpone minimum 12 months",
+                             applicant_ref, rules_fired)
 
     # ── Product eligibility ───────────────────────────────────────────────────
 
@@ -172,214 +587,41 @@ def run_evaluation(payload: dict, actor: str, tenant_id: str | None) -> dict:
             applicant_ref, rules_fired,
         )
 
-    # ── R001 Age loading ──────────────────────────────────────────────────────
+    # ── Data-driven standards (R001–R080 from uw_medical_standard / V034) ────
+    # The catalogue is loaded per (tenant, product) with system fallback; the
+    # built-in defaults mirror the seed so pure-unit runs behave identically.
 
-    if age >= 61:
-        fire("R001", "Age loading 61+", 40, "AGE", f"Age {age}")
-    elif age >= 56:
-        fire("R001", "Age loading 56–60", 25, "AGE", f"Age {age}")
-    elif age >= 46:
-        fire("R001", "Age loading 46–55", 15, "AGE", f"Age {age}")
+    standards = _load_standards(tenant_id, product_code)
+    ctx = _build_context(payload)
 
-    # ── R005 Tobacco ──────────────────────────────────────────────────────────
-
-    tobacco = payload.get("tobacco_status", "NEVER")
-    if tobacco == "SMOKER":
-        fire("R005", "Current smoker", 75, "TOBACCO",
-             "Active cigarette smoker — standard smoker rates apply")
-    elif tobacco in ("CIGAR", "PIPE"):
-        fire("R005", "Cigar/pipe user", 50, "TOBACCO")
-    elif tobacco in ("CHEW", "VAPE"):
-        fire("R005", "Smokeless/vape tobacco", 50, "TOBACCO")
-    elif tobacco == "NON_SMOKER":
-        quit_yrs = float(payload.get("tobacco_quit_years") or 0)
-        if quit_yrs < 1:
-            fire("R005", "Recent tobacco cessation <1yr", 50, "TOBACCO",
-                 "Quit less than 12 months ago — tobacco rates still apply")
-        elif quit_yrs < 2:
-            fire("R005", "Tobacco cessation 1–2yr", 25, "TOBACCO")
-
-    # ── R010 Build / BMI ──────────────────────────────────────────────────────
-
-    build = payload.get("build") or {}
-    h = float(build.get("height_inches") or payload.get("height_inches") or 0)
-    w = float(build.get("weight_lbs")    or payload.get("weight_lbs")    or 0)
-    if h > 0 and w > 0:
-        bmi = (w / (h ** 2)) * 703
-        if bmi >= 40:
-            fire("R010", "Severe obesity BMI ≥40", 100, "BUILD",
-                 f"BMI {bmi:.1f}", requires_aps=True, aps_reason="Severe obesity — APS required")
-        elif bmi >= 35:
-            fire("R010", "Obesity BMI 35–39.9", 75, "BUILD", f"BMI {bmi:.1f}")
-        elif bmi >= 30:
-            fire("R010", "Overweight BMI 30–34.9", 25, "BUILD", f"BMI {bmi:.1f}")
-        elif bmi < 17:
-            fire("R010", "Underweight BMI <17", 50, "BUILD", f"BMI {bmi:.1f}",
-                 requires_aps=True, aps_reason="Underweight — APS required")
-
-    # ── R015 Diabetes ─────────────────────────────────────────────────────────
-
-    diabetes = payload.get("diabetes_type", "NONE")
-    if diabetes == "TYPE1":
-        a1c = float(payload.get("a1c") or 7.0)
-        pts = 150 if a1c > 9 else 100 if a1c > 7.5 else 75
-        fire("R015", f"Type 1 diabetes A1c={a1c}%", pts, "DIABETES",
-             requires_aps=True, aps_reason="Type 1 diabetes — APS and latest labs required")
-    elif diabetes == "TYPE2":
-        a1c = float(payload.get("a1c") or 7.0)
-        dx_age = int(payload.get("diabetes_dx_age") or age)
-        duration = max(0, age - dx_age)
-        pts = 75 if a1c > 9 else 50 if a1c > 7.5 else 25
-        if duration > 10:
-            pts += 25
-        fire("R015", f"Type 2 diabetes A1c={a1c}%", pts, "DIABETES",
-             f"Duration {duration}yr, A1c {a1c}%")
-    elif diabetes == "PRE_DIABETIC":
-        fire("R015", "Pre-diabetic", 15, "DIABETES")
-
-    # ── R020 Cardiac ──────────────────────────────────────────────────────────
-
-    heart = payload.get("heart_condition", "NONE")
-    heart_yrs = float(payload.get("heart_event_years_ago") or 0)
-    if heart == "MI":
-        if heart_yrs < 1:
-            return _hard_decline("MI within last 12 months — postpone minimum 12 months",
-                                 applicant_ref, rules_fired)
-        pts = 150 if heart_yrs < 2 else 100 if heart_yrs < 5 else 50
-        fire("R020", f"Myocardial infarction {heart_yrs:.1f}yr ago", pts, "CARDIAC",
-             requires_aps=True, aps_reason="Post-MI — full cardiac APS required")
-    elif heart in ("CABG", "STENT"):
-        pts = 125 if heart_yrs < 2 else 75 if heart_yrs < 5 else 40
-        fire("R020", f"{heart} {heart_yrs:.1f}yr ago", pts, "CARDIAC",
-             requires_aps=True, aps_reason="Post cardiac procedure — APS required")
-    elif heart == "ANGINA":
-        fire("R020", "Angina", 75, "CARDIAC")
-    elif heart == "ARRHYTHMIA":
-        fire("R020", "Arrhythmia", 50, "CARDIAC")
-    elif heart in ("HYPERTENSION_UNCONTROLLED",):
-        fire("R020", "Uncontrolled hypertension (cardiac)", 50, "CARDIAC")
-    elif heart == "HYPERTENSION":
-        fire("R020", "Hypertension (controlled)", 20, "CARDIAC")
-
-    # ── R025 Blood pressure ───────────────────────────────────────────────────
-
-    bp = payload.get("blood_pressure") or {}
-    systolic  = int(bp.get("systolic")  or payload.get("systolic_bp")  or 0)
-    diastolic = int(bp.get("diastolic") or payload.get("diastolic_bp") or 0)
-    bp_meds   = bool(bp.get("on_medication", False))
-
-    if systolic >= 180 or diastolic >= 110:
-        fire("R025", "Severe hypertension BP ≥180/110", 100, "BP",
-             f"{systolic}/{diastolic}", requires_aps=True, aps_reason="Severe BP — APS required")
-    elif systolic >= 160 or diastolic >= 100:
-        pts = 50 if not bp_meds else 35
-        fire("R025", "Stage 2 hypertension", pts, "BP", f"{systolic}/{diastolic}")
-    elif systolic >= 140 or diastolic >= 90:
-        pts = 25 if not bp_meds else 15
-        fire("R025", "Stage 1 hypertension", pts, "BP", f"{systolic}/{diastolic}")
-
-    # ── R030 Medical flags ────────────────────────────────────────────────────
-
-    if payload.get("stroke_history"):
-        fire("R030", "Stroke / TIA history", 100, "MEDICAL",
-             requires_aps=True, aps_reason="Stroke history — neurological APS required")
-
-    if payload.get("kidney_disease"):
-        labs = payload.get("lab_values") or {}
-        egfr = float(labs.get("egfr") or 60)
-        if egfr < 30:
-            return _hard_decline(f"Kidney disease eGFR {egfr} — Stage 4/5 CKD",
-                                 applicant_ref, rules_fired)
-        pts = 75 if egfr < 45 else 40
-        fire("R030", f"Chronic kidney disease eGFR {egfr}", pts, "MEDICAL")
-
-    if payload.get("depression_history"):
-        pts = 75 if payload.get("depression_hospitalized") else 30
-        fire("R030", "Depression history" + (" (hospitalised)" if payload.get("depression_hospitalized") else ""),
-             pts, "MEDICAL")
-
-    if payload.get("epilepsy"):
-        fire("R030", "Epilepsy / seizure disorder", 50, "MEDICAL",
-             requires_aps=True, aps_reason="Epilepsy — neurology APS required")
-
-    if payload.get("copd"):
-        fire("R030", "COPD", 50, "MEDICAL",
-             requires_aps=True, aps_reason="COPD — pulmonary APS required")
-
-    # ── R040 Alcohol ──────────────────────────────────────────────────────────
-
-    drinks = int(payload.get("alcohol_drinks_week") or 0)
-    if drinks >= 28:
-        fire("R040", "Heavy alcohol use ≥28 units/week", 75, "LIFESTYLE", f"{drinks} units/wk")
-    elif drinks >= 21:
-        fire("R040", "Moderate-heavy alcohol use 21–27 units/week", 40, "LIFESTYLE")
-
-    # ── R045 Hazardous activity (flat extra) ──────────────────────────────────
-
-    if payload.get("hazardous_activity"):
-        hazard_types = payload.get("hazard_types") or []
-        high_hazard = {"BASE_JUMPING", "MOTOR_RACING", "PRIVATE_PILOT"}
-        pts = 50 if any(h in high_hazard for h in hazard_types) else 30
-        fire("R045", "Hazardous activity flat extra", pts, "LIFESTYLE",
-             f"Activities: {', '.join(hazard_types) or 'unspecified'}")
-
-    # ── R050 Family history ───────────────────────────────────────────────────
-
-    fh = payload.get("family_history") or {}
-    if _g(fh, "cardiovascular_before_60"):
-        fire("R050", "Family history CVD before age 60", 15, "FAMILY_HISTORY")
-    if _g(fh, "stroke_before_65"):
-        fire("R050", "Family history stroke before age 65", 10, "FAMILY_HISTORY")
-    if _g(fh, "cancer_history"):
-        fire("R050", "Family history cancer", 10, "FAMILY_HISTORY")
-
-    # ── R055 Occupation ───────────────────────────────────────────────────────
-
-    occ_pts = {"1": 0, "2": 10, "3": 25, "4": 50}
-    pts = occ_pts.get(occ_class, 0)
-    if pts > 0:
-        fire("R055", f"Occupation class {occ_class}", pts, "OCCUPATION")
-
-    # ── R060 Driving record ───────────────────────────────────────────────────
-
-    dui = _g(driving, "dui_dwi_count_5yr", default=0)
-    major_vio = _g(driving, "major_violations_3yr", default=0)
-    if dui == 1:
-        fire("R060", "1 DUI/DWI in last 5 years", 50, "DRIVING")
-    if major_vio >= 3:
-        fire("R060", f"{major_vio} major driving violations in last 3 years", 50, "DRIVING")
-    elif major_vio == 2:
-        fire("R060", "2 major driving violations in last 3 years", 25, "DRIVING")
-
-    # ── R070 Financial underwriting ───────────────────────────────────────────
-
-    fin = payload.get("financial") or {}
-    income   = float(fin.get("annual_income") or payload.get("annual_income") or 0)
-    existing = float(fin.get("existing_life_coverage") or payload.get("existing_coverage") or 0)
-    if income > 0:
-        max_coverage = income * 20
-        total_coverage = face_amount + existing
-        if total_coverage > max_coverage:
-            fire("R070", "Financial underwriting — coverage exceeds 20× income",
-                 30, "FINANCIAL",
-                 f"Total coverage ₹{total_coverage:,.0f} vs max ₹{max_coverage:,.0f}",
-                 requires_aps=True, aps_reason="Excess coverage — financial justification required")
-
-    # ── R080 Lab values ───────────────────────────────────────────────────────
-
-    labs = payload.get("lab_values") or {}
-    total_chol = float(labs.get("total_cholesterol") or 0)
-    hdl        = float(labs.get("hdl") or 0)
-    ldl        = float(labs.get("ldl") or 0)
-
-    if total_chol >= 260:
-        fire("R080", f"High total cholesterol {total_chol} mg/dL", 25, "LABS")
-    if hdl > 0 and total_chol > 0:
-        ratio = total_chol / hdl
-        if ratio > 6:
-            fire("R080", f"High cholesterol ratio {ratio:.1f}", 25, "LABS")
-    if ldl >= 190:
-        fire("R080", f"Very high LDL {ldl} mg/dL", 25, "LABS")
+    for std in standards:
+        for rule in std.get("rules") or []:
+            if rule.get("condition") and not _cond_ok(rule["condition"], ctx):
+                continue
+            if rule["rule_type"] == "RANGE":
+                val = ctx.get(rule.get("param"))
+                if val is None:
+                    continue
+                try:
+                    num = float(val)
+                except (TypeError, ValueError):
+                    continue
+                band = _band_match(rule.get("ranges") or [], num)
+                if band is None:
+                    continue
+                name = _fmt_template(band.get("name") or rule.get("name") or std["name"], ctx)
+                desc = _fmt_template(band.get("description") or rule.get("description") or "", ctx)
+                pts = int(band.get("debit_points") or 0) - int(band.get("credit_points") or 0)
+                fire(std["code"], name, pts, std["category"], desc,
+                     requires_aps=bool(band.get("requires_aps")),
+                     aps_reason=band.get("aps_reason"))
+            else:
+                name = _fmt_template(rule.get("name") or std["name"], ctx)
+                desc = _fmt_template(rule.get("description") or "", ctx)
+                pts = int(rule.get("debit_points") or 0) - int(rule.get("credit_points") or 0)
+                fire(std["code"], name, pts, std["category"], desc,
+                     requires_aps=bool(rule.get("requires_aps")),
+                     aps_reason=rule.get("aps_reason"))
 
     # ── Gender credit (females lower mortality at most ages) ──────────────────
 
