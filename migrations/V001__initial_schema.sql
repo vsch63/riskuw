@@ -389,7 +389,11 @@ CREATE TABLE public.batch_jobs (
     started_at timestamp with time zone,
     completed_at timestamp with time zone,
     policy_effective_date date,
-    policy_expire_date date
+    policy_expire_date date,
+    file_content text,
+    tenant_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
