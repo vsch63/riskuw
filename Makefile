@@ -84,6 +84,23 @@ migrate:
 migrate-v002:   ## Apply only V002 (RI cession trigger)
 	psql "$$DATABASE_URL" -f migrations/V002__ri_cession_trigger.sql
 
+ci-test:        ## Fresh-DB CI run: migrate + seed + full suite (mirrors GitHub Actions)
+	@docker exec riskuw_postgres psql -U uw_user -d postgres \
+	  -c "DROP DATABASE IF EXISTS riskuw_ci;" >/dev/null
+	@docker exec riskuw_postgres psql -U uw_user -d postgres \
+	  -c "CREATE DATABASE riskuw_ci OWNER uw_user;" >/dev/null
+	@for f in migrations/V*.sql; do \
+	  echo "-- $$f"; \
+	  docker exec -i riskuw_postgres psql -U uw_user -d riskuw_ci < "$$f" || exit 1; \
+	done
+	@DATABASE_URL="postgresql://uw_user:$${DB_PASSWORD:-uw_password_change_in_prod}@localhost:5433/riskuw_ci" \
+	  $(shell [ -x venv/bin/python ] && echo venv/bin/python || echo python3) scripts/ci/seed_test_db.py
+	@TEST_DATABASE_URL="postgresql://uw_user:$${DB_PASSWORD:-uw_password_change_in_prod}@localhost:5433/riskuw_ci" \
+	  TEST_USERNAME=admin TEST_PASSWORD=TestPass123! \
+	  JWT_SECRET=$${JWT_SECRET:-ci-test-secret-change-me} \
+	  $(shell [ -x venv/bin/pytest ] && echo venv/bin/pytest || echo "python3 -m pytest") \
+	  $(APP_DIR)/tests/ -q
+
 db-shell:       ## Open psql shell to the configured database
 	psql "$$DATABASE_URL"
 

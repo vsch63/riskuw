@@ -72,13 +72,16 @@ services:
       REDIS_URL:    redis://redis:6379/0
       OLLAMA_HOST:  "http://dnb_ollama:11434"
       ENVIRONMENT:  ${ENVIRONMENT:-production}
+      JWT_SECRET:   ${JWT_SECRET:-dev_only_change_me_9f2c1e7b4a8d}
+      # MFA_ENFORCED=true → privileged roles must have TOTP set up to log in
+      MFA_ENFORCED: ${MFA_ENFORCED:-false}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8001:8000"
+      - "8001:8000"
     volumes:
       - riskuw_fastapi_logs:/app/logs
     healthcheck:
