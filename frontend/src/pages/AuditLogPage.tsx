@@ -6,6 +6,7 @@ import {
   ReloadOutlined, DownloadOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 // Direct fetch helper for /audit/* routes (not proxied via /api)
 const _tok = () => localStorage.getItem('riskuw_token') || ''
@@ -170,11 +171,11 @@ function EventDetail({ event, onClose }: { event: AuditEvent; onClose: () => voi
           <Table dataSource={timeline} rowKey={(r:any) => r.occurred_at + r.event_type}
             size="small" pagination={false}
             columns={[
-              { title:'Time',     dataIndex:'occurred_at', width:160 },
-              { title:'Event',    dataIndex:'event_type' },
-              { title:'Actor',    dataIndex:'actor', width:130 },
-              { title:'Category', dataIndex:'category', width:120 },
-              { title:'Outcome',  dataIndex:'outcome', width:100,
+              { title: Titled('Time', 'occurred_at'), dataIndex:'occurred_at', width:160 },
+              { title: Titled('Event', 'event_type'), dataIndex:'event_type' },
+              { title: Titled('Actor', 'actor'), dataIndex:'actor', width:130 },
+              { title: Titled('Category', 'category'), dataIndex:'category', width:120 },
+              { title: Titled('Outcome', 'outcome'), dataIndex:'outcome', width:100,
                 render:(v:string) => <Tag color={v==='SUCCESS'?'success':'error'} style={{ fontSize:11 }}>{v}</Tag> },
             ]}
           />
@@ -258,11 +259,11 @@ export default function AuditLogPage() {
 
   const cols = [
     {
-      title: 'Time', dataIndex: 'occurred_at', width: 155,
+      title: Titled('Time', 'occurred_at'), dataIndex: 'occurred_at', width: 155,
       render: (v:string) => <span style={{ fontSize:12, color:'#6b7280', fontFamily:'var(--font-mono,monospace)' }}>{v}</span>,
     },
     {
-      title: 'Category', dataIndex: 'event_category', width: 130,
+      title: Titled('Category', 'event_category'), dataIndex: 'event_category', width: 130,
       render: (v:string) => (
         <Tag style={{ background: `${CAT_COLOR[v] || '#6b7280'}22`,
           color: CAT_COLOR[v] || '#9ca3af', border:`1px solid ${CAT_COLOR[v] || '#6b7280'}44`,
@@ -272,11 +273,11 @@ export default function AuditLogPage() {
       ),
     },
     {
-      title: 'Event', dataIndex: 'event_type',
+      title: Titled('Event', 'event_type'), dataIndex: 'event_type',
       render: (v:string) => <span style={{ fontSize:12, fontWeight:600, color:'#e2e8f0' }}>{v}</span>,
     },
     {
-      title: 'Actor', dataIndex: 'actor_username', width: 130,
+      title: Titled('Actor', 'actor_username'), dataIndex: 'actor_username', width: 130,
       render: (v:string, r:AuditEvent) => (
         <div>
           <div style={{ fontSize:12, color:'#9ca3af' }}>{v || '—'}</div>
@@ -285,7 +286,7 @@ export default function AuditLogPage() {
       ),
     },
     {
-      title: 'Entity', dataIndex: 'entity_type', width: 120,
+      title: Titled('Entity', 'entity_type'), dataIndex: 'entity_type', width: 120,
       render: (v:string, r:AuditEvent) => (
         <div>
           <div style={{ fontSize:11, color:'#6b7280' }}>{v || '—'}</div>
@@ -294,7 +295,7 @@ export default function AuditLogPage() {
       ),
     },
     {
-      title: 'Outcome', dataIndex: 'outcome', width: 90,
+      title: Titled('Outcome', 'outcome'), dataIndex: 'outcome', width: 90,
       render: (v:string) => v === 'SUCCESS'
         ? <span style={{ color:'#4ade80', fontSize:14  }}>✅</span>
         : <span style={{ color:'#f87171', fontSize:14 }}>❌</span>,

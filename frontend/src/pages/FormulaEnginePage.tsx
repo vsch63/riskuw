@@ -16,6 +16,7 @@ import {
 } from 'antd'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { formulaAPI } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -213,12 +214,12 @@ function FormulaModal({ formula, refTables, onClose, onSaved }: any) {
 
   const structural = (r: any) => STRUCTURAL_OPS.has(r.operator)
   const stepCols = [
-    { title: 'Seq', dataIndex: 'seq_no', width: 60, render: (v: number) => <span style={mono}>{v}</span> },
-    { title: 'Op', dataIndex: 'operator', width: 90, render: (v: string) =>
+    { title: Titled('Seq', 'seq_no'), dataIndex: 'seq_no', width: 60, render: (v: number) => <span style={mono}>{v}</span> },
+    { title: Titled('Op', 'operator'), dataIndex: 'operator', width: 90, render: (v: string) =>
       <Tag color={OP_META[v]?.color}>{OP_META[v]?.label || v}</Tag> },
-    { title: 'Factor', dataIndex: 'factor', width: 70, render: (v: number, r: any) =>
+    { title: Titled('Factor', 'factor'), dataIndex: 'factor', width: 70, render: (v: number, r: any) =>
       structural(r) ? <span style={{ color: 'var(--slate-500)' }}>—</span> : <span style={mono}>{v}</span> },
-    { title: 'Parameter', dataIndex: 'parameter_type', render: (v: string, r: any) =>
+    { title: Titled('Parameter', 'parameter_type'), dataIndex: 'parameter_type', render: (v: string, r: any) =>
       structural(r) ? <span style={{ color: 'var(--slate-500)', fontSize: 11 }}>—</span> :
       <span style={{ fontSize: 11 }}>
         <Tag color="blue">{v}</Tag>
@@ -227,7 +228,7 @@ function FormulaModal({ formula, refTables, onClose, onSaved }: any) {
           : v === 'USER_VALUE' ? <span style={mono}>= {r.user_value}</span>
             : r.user_label ? <span style={mono}>· {r.user_label}</span> : null}
       </span> },
-    { title: 'Condition', dataIndex: 'condition', render: (c: any, r: any) =>
+    { title: Titled('Condition', 'condition'), dataIndex: 'condition', render: (c: any, r: any) =>
       r.operator === 'IF' ? <span style={{ fontSize: 11, color: 'var(--teal-300)', fontFamily: 'var(--font-mono)' }}>{conditionText(c)}</span>
         : <span style={{ color: 'var(--slate-500)' }}>—</span> },
     { title: '', width: 60, render: (_: any, r: any) => (
@@ -411,12 +412,12 @@ function FormulasTab({ tick }: { tick: number }) {
   }
 
   const cols = [
-    { title: 'Name', dataIndex: 'formula_name', render: (v: string, r: any) =>
+    { title: Titled('Name', 'formula_name'), dataIndex: 'formula_name', render: (v: string, r: any) =>
       <a onClick={() => openFormula(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
-    { title: 'Type', dataIndex: 'formula_type', width: 170, render: (v: string) => <Tag color={TYPE_COLOR[v] || 'default'}>{v}</Tag> },
-    { title: 'Scope', dataIndex: 'product_code', width: 120, render: (v?: string) => v ? <Tag>{v}</Tag> : <Tag color="green">System</Tag> },
-    { title: 'Steps', dataIndex: 'step_count', width: 70, render: (v: number) => <span style={mono}>{v ?? 0}</span> },
-    { title: 'Active', dataIndex: 'is_active', width: 80, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: Titled('Type', 'formula_type'), dataIndex: 'formula_type', width: 170, render: (v: string) => <Tag color={TYPE_COLOR[v] || 'default'}>{v}</Tag> },
+    { title: Titled('Scope', 'product_code'), dataIndex: 'product_code', width: 120, render: (v?: string) => v ? <Tag>{v}</Tag> : <Tag color="green">System</Tag> },
+    { title: Titled('Steps', 'step_count'), dataIndex: 'step_count', width: 70, render: (v: number) => <span style={mono}>{v ?? 0}</span> },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 80, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
   ]
 
   return (
@@ -495,12 +496,12 @@ function RefTablesTab({ tick }: { tick: number }) {
   }
 
   const cols = [
-    { title: 'Code', dataIndex: 'table_code', render: (v: string) => <span style={mono}>{v}</span> },
-    { title: 'Name', dataIndex: 'table_name', render: (v: string, r: any) =>
+    { title: Titled('Code', 'table_code'), dataIndex: 'table_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Name', 'table_name'), dataIndex: 'table_name', render: (v: string, r: any) =>
       <a onClick={() => openViewer(r.id)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
-    { title: 'Key', dataIndex: 'key_field', width: 130, render: (v?: string) =>
+    { title: Titled('Key', 'key_field'), dataIndex: 'key_field', width: 130, render: (v?: string) =>
       v ? <Tag color="purple" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{v}</Tag> : <span style={{ color: '#8b949e' }}>—</span> },
-    { title: 'Rows', dataIndex: 'row_count', width: 70, render: (v: number) => <span style={mono}>{v ?? 0}</span> },
+    { title: Titled('Rows', 'row_count'), dataIndex: 'row_count', width: 70, render: (v: number) => <span style={mono}>{v ?? 0}</span> },
   ]
 
   return (
@@ -526,11 +527,11 @@ function RefTablesTab({ tick }: { tick: number }) {
           title={`Reference Table · ${viewing.table_code}`} destroyOnClose>
           <Table size="small" rowKey="id" dataSource={viewing.rows || []} pagination={{ pageSize: 8 }}
             columns={[
-              { title: 'Match', dataIndex: 'match_type', width: 80, render: (v: string) => <Tag color={v === 'BAND' ? 'blue' : 'purple'}>{v}</Tag> },
-              { title: 'From', dataIndex: 'band_min', width: 90, render: (v?: number) => v ?? '—' },
-              { title: 'To', dataIndex: 'band_max', width: 90, render: (v?: number) => v ?? '∞' },
-              { title: 'Match Value', dataIndex: 'match_value', width: 120, render: (v?: string) => v || '—' },
-              { title: 'Output', dataIndex: 'output_value', render: (v: number) => <span style={mono}>{v.toLocaleString('en-IN')}</span> },
+              { title: Titled('Match', 'match_type'), dataIndex: 'match_type', width: 80, render: (v: string) => <Tag color={v === 'BAND' ? 'blue' : 'purple'}>{v}</Tag> },
+              { title: Titled('From', 'band_min'), dataIndex: 'band_min', width: 90, render: (v?: number) => v ?? '—' },
+              { title: Titled('To', 'band_max'), dataIndex: 'band_max', width: 90, render: (v?: number) => v ?? '∞' },
+              { title: Titled('Match Value', 'match_value'), dataIndex: 'match_value', width: 120, render: (v?: string) => v || '—' },
+              { title: Titled('Output', 'output_value'), dataIndex: 'output_value', render: (v: number) => <span style={mono}>{v.toLocaleString('en-IN')}</span> },
               { title: '', width: 50, render: (_: any, r: any) => (
                 <Popconfirm title="Delete row?" onConfirm={() => removeRow(r.id)}>
                   <Button size="small" type="text" danger icon={<DeleteOutlined />} />

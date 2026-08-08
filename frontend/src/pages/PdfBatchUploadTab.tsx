@@ -11,6 +11,7 @@ import {
   DeleteOutlined, EditOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -301,7 +302,7 @@ export default function PdfBatchUploadTab({ onSubmitted }: Props) {
             }
             columns={[
               {
-                title: 'File',
+                title: Titled('File', 'filename'),
                 dataIndex: 'filename',
                 width: 180,
                 render: (v: string, r: ExtractedRow) => (
@@ -314,7 +315,7 @@ export default function PdfBatchUploadTab({ onSubmitted }: Props) {
                 ),
               },
               {
-                title: 'Status',
+                title: Titled('Status', 'status'),
                 dataIndex: 'status',
                 width: 110,
                 render: (v: string, r: ExtractedRow) => {
@@ -330,7 +331,7 @@ export default function PdfBatchUploadTab({ onSubmitted }: Props) {
                 },
               },
               {
-                title: 'Applicant Ref',
+                title: Titled('Applicant Ref', 'applicant_ref'),
                 dataIndex: 'applicant_ref',
                 width: 140,
                 render: (v: string, r: ExtractedRow, idx: number) => (
@@ -345,7 +346,7 @@ export default function PdfBatchUploadTab({ onSubmitted }: Props) {
                 ),
               },
               {
-                title: 'Product Code',
+                title: Titled('Product Code', 'product_code'),
                 dataIndex: 'product_code',
                 width: 160,
                 render: (v: string, r: ExtractedRow, idx: number) => (

@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../api/client'
 import { useAuthStore } from '../context/authStore'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -281,7 +282,7 @@ function AllTenantsTab({ onSelect, refresh }: { onSelect: (t: Tenant) => void; r
 
   const cols = [
     {
-      title: 'Carrier', dataIndex: 'tenant_name', width: 240,
+      title: Titled('Carrier', 'tenant_name'), dataIndex: 'tenant_name', width: 240,
       render: (v: string, t: Tenant) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <TenantAvatar name={v}/>
@@ -292,10 +293,10 @@ function AllTenantsTab({ onSelect, refresh }: { onSelect: (t: Tenant) => void; r
         </div>
       ),
     },
-    { title: 'Plan',   dataIndex: 'plan_tier', width: 130, render: (v: string) => <PlanBadge tier={v}/> },
-    { title: 'Status', dataIndex: 'status',    width: 110, render: (v: string) => <StatusDot status={v}/> },
+    { title: Titled('Plan', 'plan_tier'),   dataIndex: 'plan_tier', width: 130, render: (v: string) => <PlanBadge tier={v}/> },
+    { title: Titled('Status', 'status'), dataIndex: 'status',    width: 110, render: (v: string) => <StatusDot status={v}/> },
     {
-      title: 'Contact', dataIndex: 'contact_email', width: 190,
+      title: Titled('Contact', 'contact_email'), dataIndex: 'contact_email', width: 190,
       render: (v: string, t: Tenant) => (
         <div>
           <div style={{ fontSize: 12, color: '#9ca3af' }}>{t.contact_name || '—'}</div>
@@ -321,7 +322,7 @@ function AllTenantsTab({ onSelect, refresh }: { onSelect: (t: Tenant) => void; r
       },
     },
     {
-      title: 'Users', dataIndex: 'max_users', width: 80,
+      title: Titled('Users', 'max_users'), dataIndex: 'max_users', width: 80,
       render: (v: number) => <span style={{ fontSize: 12, color: '#9ca3af' }}>max {v}</span>,
     },
     {

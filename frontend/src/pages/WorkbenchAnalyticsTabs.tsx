@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react'
 import { Button, Spin, Table } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line,
@@ -155,15 +156,15 @@ export function SessionAnalyticsTab({ cases }: { cases: SessionCase[] }) {
           dataSource={rows} rowKey="ref" size="small"
           pagination={{ pageSize:10, showSizeChanger:false }}
           columns={[
-            { title:'Ref',     dataIndex:'ref',     width:160 },
-            { title:'Outcome', dataIndex:'outcome', render:(v:string) => (
+            { title:Titled('Ref', 'ref'),     dataIndex:'ref',     width:160 },
+            { title:Titled('Outcome', 'outcome'), dataIndex:'outcome', render:(v:string) => (
               <span style={{ color: v.includes('APPROVED') ? '#22c55e' : v.includes('DECLIN') ? '#ef4444' : '#f59e0b', fontWeight:600, fontSize:12 }}>{v}</span>
             )},
-            { title:'Product', dataIndex:'product', width:130 },
-            { title:'Debits',  dataIndex:'debits',  width:80,
+            { title:Titled('Product', 'product'), dataIndex:'product', width:130 },
+            { title:Titled('Debits', 'debits'),  dataIndex:'debits',  width:80,
               render:(v:number) => <span style={{ fontFamily:'var(--font-mono,monospace)', color: v > 150 ? '#ef4444' : v > 75 ? '#f59e0b' : '#9ca3af' }}>{v}</span> },
-            { title:'Pathway', dataIndex:'pathway', width:180, render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v}</span> },
-            { title:'Time',    dataIndex:'ms',      width:80,  render:(v:number) => v ? <span style={{ fontSize:11, color:'#6b7280' }}>{v}ms</span> : '—' },
+            { title:Titled('Pathway', 'pathway'), dataIndex:'pathway', width:180, render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v}</span> },
+            { title:Titled('Time', 'ms'),    dataIndex:'ms',      width:80,  render:(v:number) => v ? <span style={{ fontSize:11, color:'#6b7280' }}>{v}ms</span> : '—' },
           ]}
         />
       </div>

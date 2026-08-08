@@ -8,6 +8,7 @@ import {
   EditOutlined, DeleteOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 import PremiumFormulaTab from './PremiumFormulaTab'
 
 const { Option } = Select
@@ -149,17 +150,17 @@ function RulesTab({ code, prod }: { code: string; prod?: Product }) {
   })
 
   const cols = [
-    { title:'Rule ID', dataIndex:'rule_id', width:120,
+    { title:Titled('Rule ID','rule_id'), dataIndex:'rule_id', width:120,
       render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontSize:12, color:'#00d4aa' }}>{v}</span> },
-    { title:'Rule Name', dataIndex:'rule_name',
+    { title:Titled('Rule Name','rule_name'), dataIndex:'rule_name',
       render:(v:string) => v || <span style={{ color:'#6b7280' }}>—</span> },
-    { title:'Enabled', dataIndex:'is_enabled', width:90,
+    { title:Titled('Enabled','is_enabled'), dataIndex:'is_enabled', width:90,
       render:(v:boolean, r:Rule) => <Switch checked={v} size="small" onChange={() => toggle(r)}/> },
-    { title:'Debit Override', dataIndex:'debit_points_override', width:130,
+    { title:Titled('Debit Override','debit_points_override'), dataIndex:'debit_points_override', width:130,
       render:(v:number, r:Rule) => r.debit_override_active && v != null
         ? <Tag style={{ fontFamily:'var(--font-mono, monospace)' }}>{v} pts</Tag>
         : <span style={{ color:'#6b7280', fontSize:11 }}>default</span> },
-    { title:'Flat Extra Override', dataIndex:'flat_extra_override', width:150,
+    { title:Titled('Flat Extra Override','flat_extra_override'), dataIndex:'flat_extra_override', width:150,
       render:(v:number, r:Rule) => r.flat_extra_override_active && v != null
         ? <Tag color="gold" style={{ fontFamily:'var(--font-mono, monospace)' }}>₹{v}/₹1k</Tag>
         : <span style={{ color:'#6b7280', fontSize:11 }}>default</span> },
@@ -382,12 +383,12 @@ function BuildTableTab({ code }: { code: string }) {
   }
 
   const cols = [
-    { title:'BMI Min',      dataIndex:'bmi_min',      width:100, render:(v:number) => <span style={{ fontFamily:'var(--font-mono, monospace)' }}>{v}</span> },
-    { title:'BMI Max',      dataIndex:'bmi_max',      width:100, render:(v:number) => <span style={{ fontFamily:'var(--font-mono, monospace)' }}>{v}</span> },
-    { title:'Band Label',   dataIndex:'band_label',   render:(v:string) => v || '—' },
-    { title:'Debit Points', dataIndex:'debit_points',
+    { title:Titled('BMI Min','bmi_min'),      dataIndex:'bmi_min',      width:100, render:(v:number) => <span style={{ fontFamily:'var(--font-mono, monospace)' }}>{v}</span> },
+    { title:Titled('BMI Max','bmi_max'),      dataIndex:'bmi_max',      width:100, render:(v:number) => <span style={{ fontFamily:'var(--font-mono, monospace)' }}>{v}</span> },
+    { title:Titled('Band Label','band_label'),   dataIndex:'band_label',   render:(v:string) => v || '—' },
+    { title:Titled('Debit Points','debit_points'), dataIndex:'debit_points',
       render:(v:number) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color: v > 50 ? '#f87171' : v > 25 ? '#fbbf24' : '#9ca3af' }}>{v}</span> },
-    { title:'Decision', dataIndex:'is_decline',
+    { title:Titled('Decision','is_decline'), dataIndex:'is_decline',
       render:(v:boolean) => v ? <Tag color="error">AUTO-DECLINE</Tag> : <Tag color="success">RATE</Tag> },
     { title:'', width:60, render:(_:any, b:BuildBand) => (
       <Popconfirm title="Delete this band?" onConfirm={() => deleteBand(b)} okText="Delete" cancelText="Cancel">
@@ -763,25 +764,25 @@ function ProductScalesTab({ code }: { code: string }) {
 
   const cols = [
     {
-      title: 'Scale Name', dataIndex: 'scale_name',
+      title: Titled('Scale Name','scale_name'), dataIndex: 'scale_name',
       render: (v: string) => <span style={{ fontWeight: 600, color: '#e2e8f0' }}>{v}</span>,
     },
     {
-      title: 'Type', dataIndex: 'scale_type', width: 90,
+      title: Titled('Type','scale_type'), dataIndex: 'scale_type', width: 90,
       render: (v: string) => <Tag color={v === 'UW' ? 'cyan' : 'gold'} style={{ fontWeight: 700, fontSize: 11 }}>{v}</Tag>,
     },
     {
-      title: 'Output', dataIndex: 'premium_output_type', width: 150,
+      title: Titled('Output','premium_output_type'), dataIndex: 'premium_output_type', width: 150,
       render: (v: string | null) => v
         ? <span style={{ fontSize: 11, color: '#9ca3af' }}>{v === 'RATE_PER_THOUSAND' ? 'Rate / ₹1k SA' : 'Multiplier'}</span>
         : <span style={{ fontSize: 11, color: '#4b5563' }}>Debit Points</span>,
     },
     {
-      title: 'Effective From', dataIndex: 'effective_from', width: 130,
+      title: Titled('Effective From','effective_from'), dataIndex: 'effective_from', width: 130,
       render: (v: string) => <span style={{ fontSize: 12, color: '#9ca3af' }}>{v}</span>,
     },
     {
-      title: 'Attached By', dataIndex: 'created_by', width: 120,
+      title: Titled('Attached By','created_by'), dataIndex: 'created_by', width: 120,
       render: (v: string) => <span style={{ fontSize: 11, color: '#6b7280' }}>{v}</span>,
     },
     {

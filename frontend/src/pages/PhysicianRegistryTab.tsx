@@ -8,6 +8,7 @@ import {
 } from "@ant-design/icons"
 import { api } from "../api/client"
 import dayjs from "dayjs"
+import { Titled } from "../components/ColHint"
 
 const { Option } = Select
 
@@ -110,7 +111,7 @@ export default function PhysicianRegistryTab() {
 
   const columns = [
     {
-      title: "Name", dataIndex: "physician_name", width: 180,
+      title: Titled("Name", 'physician_name'), dataIndex: "physician_name", width: 180,
       render: (v: string, row: Physician) => (
         <div>
           <div style={{ fontWeight: 600, color: "#e2e8f0" }}>{v}</div>
@@ -119,13 +120,13 @@ export default function PhysicianRegistryTab() {
       )
     },
     {
-      title: "Specialisation", dataIndex: "specialisation", width: 150,
+      title: Titled("Specialisation", 'specialisation'), dataIndex: "specialisation", width: 150,
       render: (v: string | null) => v
         ? <Tag color="blue">{v}</Tag>
         : <span style={{ color: "#4b5563" }}>—</span>
     },
     {
-      title: "Clinic", dataIndex: "clinic_name", width: 160,
+      title: Titled("Clinic", 'clinic_name'), dataIndex: "clinic_name", width: 160,
       render: (v: string | null) => v || "—"
     },
     {
@@ -146,11 +147,11 @@ export default function PhysicianRegistryTab() {
       )
     },
     {
-      title: "Valid From", dataIndex: "effective_date", width: 100,
+      title: Titled("Valid From", 'effective_date'), dataIndex: "effective_date", width: 100,
       render: (v: string | null) => v || <span style={{ color: "#4b5563" }}>—</span>
     },
     {
-      title: "Status", dataIndex: "is_active", width: 80,
+      title: Titled("Status", 'is_active'), dataIndex: "is_active", width: 80,
       render: (v: boolean) => v
         ? <Tag color="green">Active</Tag>
         : <Tag color="default">Inactive</Tag>

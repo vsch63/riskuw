@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../api/client'
 import PdfBatchUploadTab from './PdfBatchUploadTab'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 const { Dragger } = Upload
@@ -730,19 +731,19 @@ function ResultsTab({ initialJobId }: { initialJobId?: string }) {
                 onChange: (p: number) => { setRecPage(p); loadRecords(selJob, p) },
                 showSizeChanger: false, showTotal: (t: number) => `${t} records` }}
               columns={[
-                { title: '#', dataIndex: 'row_number', width: 60 },
-                { title: 'Ref', dataIndex: 'applicant_ref', width: 130,
+                { title: Titled('#', 'row_number'), dataIndex: 'row_number', width: 60 },
+                { title: Titled('Ref', 'applicant_ref'), dataIndex: 'applicant_ref', width: 130,
                   render: (v: string) => <code style={{ fontSize:11, color:'#00d4aa' }}>{v}</code> },
-                { title: 'Product', dataIndex: 'product_code', width: 120 },
-                { title: 'Outcome', dataIndex: 'outcome', width: 150,
+                { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 120 },
+                { title: Titled('Outcome', 'outcome'), dataIndex: 'outcome', width: 150,
                   render: (v: string) => {
                     const c = v?.includes('APPROVED') ? '#22c55e' : v?.includes('DECLINED') ? '#ef4444' : v?.includes('REFERRED') ? '#f59e0b' : '#6b7280'
                     return <span style={{ color:c, fontWeight:600, fontSize:11 }}>{v||'—'}</span>
                   }},
-                { title: 'Risk Class', dataIndex: 'risk_class', width: 110, render: (v:string) => v||'—' },
-                { title: 'NDP', dataIndex: 'net_debit_points', width: 70,
+                { title: Titled('Risk Class', 'risk_class'), dataIndex: 'risk_class', width: 110, render: (v:string) => v||'—' },
+                { title: Titled('NDP', 'net_debit_points'), dataIndex: 'net_debit_points', width: 70,
                   render: (v:number) => <span style={{ color: v>100?'#ef4444':v>50?'#f59e0b':'#22c55e' }}>{v}</span> },
-                { title: 'Premium', dataIndex: 'premium', width: 120,
+                { title: Titled('Premium', 'premium'), dataIndex: 'premium', width: 120,
                   render: (v:number) => v ? `₹${Number(v).toLocaleString('en-IN')}` : '—' },
                 { title: 'Letter', width: 80,
                   render: (_:any, rec:any) => (
@@ -818,11 +819,11 @@ function ScheduleTab() {
           <Table dataSource={schedules} rowKey="id" size="small" pagination={false}
             style={{ marginBottom:16 }}
             columns={[
-              { title:'Name',     dataIndex:'schedule_name' },
-              { title:'Cron',     dataIndex:'cron_expression', render:(v:string) => <code style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</code> },
-              { title:'Status',   dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'default'}>{v?'Active':'Paused'}</Tag> },
-              { title:'Last run', dataIndex:'last_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
-              { title:'Next run', dataIndex:'next_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
+              { title: Titled('Name', 'schedule_name'), dataIndex:'schedule_name' },
+              { title: Titled('Cron', 'cron_expression'), dataIndex:'cron_expression', render:(v:string) => <code style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</code> },
+              { title: Titled('Status', 'is_active'), dataIndex:'is_active', width:100, render:(v:boolean) => <Tag color={v?'success':'default'}>{v?'Active':'Paused'}</Tag> },
+              { title: Titled('Last run', 'last_run_at'), dataIndex:'last_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
+              { title: Titled('Next run', 'next_run_at'), dataIndex:'next_run_at', width:160, render:(v:string) => v?.slice(0,16)||'—' },
               { title:'', width:100, render:(_:any, r:any) => (
                 <Switch checked={r.is_active} size="small" onChange={() => toggle(r.id, r.is_active)}/>
               )},

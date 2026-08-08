@@ -7,6 +7,7 @@ import {
   SaveOutlined, ReloadOutlined, SendOutlined,
   DownloadOutlined, EyeOutlined, ApiOutlined,
 } from '@ant-design/icons'
+import { Titled, CellHint } from '../components/ColHint'
 import { api } from '../api/client'
 
 const { Option } = Select
@@ -464,12 +465,12 @@ export default function OutputInterfacePage() {
               size="small"
               pagination={{ pageSize:10, showSizeChanger:false }}
               columns={[
-                { title:'Applicant',   dataIndex:'applicant_ref',    width:130 },
-                { title:'Name',        dataIndex:'applicant_name',   width:150 },
-                { title:'Outcome',     dataIndex:'outcome',          width:100 },
-                { title:'Attempts',    dataIndex:'push_attempts',    width:80  },
-                { title:'Last Error',  dataIndex:'push_last_error',  render:(v:string) => <span style={{ fontSize:11, color:'#f87171' }}>{v?.slice(0,60)||'—'}</span> },
-                { title:'Last Tried',  dataIndex:'push_last_at',     width:140, render:(v:string) => v?.slice(0,16)||'—' },
+                { title: Titled('Applicant', 'applicant_ref'), dataIndex:'applicant_ref',    width:130 },
+                { title: Titled('Name', 'applicant_name'), dataIndex:'applicant_name',   width:150 },
+                { title: Titled('Outcome', 'outcome'), dataIndex:'outcome',          width:100, render: CellHint('outcome') },
+                { title: Titled('Attempts', 'push_attempts'), dataIndex:'push_attempts',    width:80  },
+                { title: Titled('Last Error', 'push_last_error'), dataIndex:'push_last_error',  render:(v:string) => <span style={{ fontSize:11, color:'#f87171' }}>{v?.slice(0,60)||'—'}</span> },
+                { title: Titled('Last Tried', 'push_last_at'), dataIndex:'push_last_at',     width:140, render:(v:string) => v?.slice(0,16)||'—' },
                 { title:'', width:80, render:(_:any, r:FailedRecord) => (
                   <Button size="small" icon={<ReloadOutlined/>}
                     onClick={() => repushSingle(r.id)}
@@ -541,14 +542,14 @@ export default function OutputInterfacePage() {
               pagination={false}
               scroll={{ x:true }}
               columns={[
-                { title:'Applicant ref', dataIndex:'applicant_ref',  width:130 },
-                { title:'Name',          dataIndex:'applicant_name', width:150 },
-                { title:'Product',       dataIndex:'product_code',   width:130 },
-                { title:'Outcome',       dataIndex:'outcome',        width:100 },
-                { title:'Decision date', dataIndex:'decision_date',  width:120 },
-                { title:'Push status',   dataIndex:'push_status',    width:110 },
-                { title:'Source',        dataIndex:'source',         width:90  },
-                { title:'Queued at',     dataIndex:'created_at',     width:130, render:(v:string) => v?.slice(0,16)||'—' },
+                { title: Titled('Applicant ref', 'applicant_ref'), dataIndex:'applicant_ref',  width:130 },
+                { title: Titled('Name', 'applicant_name'), dataIndex:'applicant_name', width:150 },
+                { title: Titled('Product', 'product_code'), dataIndex:'product_code',   width:130 },
+                { title: Titled('Outcome', 'outcome'), dataIndex:'outcome',        width:100, render: CellHint('outcome') },
+                { title: Titled('Decision date', 'decision_date'), dataIndex:'decision_date',  width:120 },
+                { title: Titled('Push status', 'push_status'), dataIndex:'push_status',    width:110 },
+                { title: Titled('Source', 'source'), dataIndex:'source',         width:90  },
+                { title: Titled('Queued at', 'created_at'), dataIndex:'created_at',     width:130, render:(v:string) => v?.slice(0,16)||'—' },
               ]}
             />
           </div>

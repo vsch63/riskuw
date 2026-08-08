@@ -14,6 +14,7 @@ import {
 } from 'antd'
 import { ReloadOutlined, SaveOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { medicalStandardsAPI } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 const { Text } = Typography
 
@@ -148,10 +149,10 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
   }
 
   const cols = [
-    { title: 'Code', dataIndex: 'code', width: 70, render: (v: string) => <Tag style={mono}>{v}</Tag> },
-    { title: 'Family', dataIndex: 'family', width: 130 },
-    { title: 'Name', dataIndex: 'name' },
-    { title: 'Category', dataIndex: 'category', width: 130 },
+    { title: Titled('Code', 'code'), dataIndex: 'code', width: 70, render: (v: string) => <Tag style={mono}>{v}</Tag> },
+    { title: Titled('Family', 'family'), dataIndex: 'family', width: 130 },
+    { title: Titled('Name', 'name'), dataIndex: 'name' },
+    { title: Titled('Category', 'category'), dataIndex: 'category', width: 130 },
     { title: 'Rules', width: 70, render: (_: any, s: Standard) => s.rules?.length || 0 },
     { title: 'Bands', width: 70, render: (_: any, s: Standard) => (s.rules || []).reduce((n, r) => n + (r.ranges?.length || 0), 0) },
     {

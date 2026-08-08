@@ -24,6 +24,7 @@ import {
   PlayCircleOutlined, SaveOutlined, ArrowUpOutlined, ArrowDownOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 const { TextArea } = Input
@@ -667,7 +668,7 @@ export default function PremiumFormulaTab({ code }: { code: string }) {
 
   const formulaCols = [
     {
-      title: 'Formula Name', dataIndex: 'formula_name',
+      title: Titled('Formula Name', 'formula_name'), dataIndex: 'formula_name',
       render: (v: string, r: Formula) => (
         <div>
           <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13 }}>{v}</div>
@@ -676,17 +677,17 @@ export default function PremiumFormulaTab({ code }: { code: string }) {
       ),
     },
     {
-      title: 'Type', dataIndex: 'formula_type', width: 160,
+      title: Titled('Type', 'formula_type'), dataIndex: 'formula_type', width: 160,
       render: (v: string) => {
         const t = FORMULA_TYPES.find(x => x.value === v)
         return <Tag color={t?.color || 'default'} style={{ fontSize: 11, fontWeight: 600 }}>{t?.label || v}</Tag>
       },
     },
-    { title: 'Steps', dataIndex: 'step_count', width: 70,
+    { title: Titled('Steps', 'step_count'), dataIndex: 'step_count', width: 70,
       render: (v: number) => <span style={{ color: '#00d4aa', fontFamily: 'var(--font-mono,monospace)', fontWeight: 600 }}>{v ?? 0}</span> },
-    { title: 'Effective', dataIndex: 'effective_date', width: 110,
+    { title: Titled('Effective', 'effective_date'), dataIndex: 'effective_date', width: 110,
       render: (v: string) => <span style={{ fontSize: 11, color: '#9ca3af' }}>{v}</span> },
-    { title: 'Status', dataIndex: 'is_active', width: 90,
+    { title: Titled('Status', 'is_active'), dataIndex: 'is_active', width: 90,
       render: (v: boolean) => <Tag color={v ? 'success' : 'default'}>{v ? 'Active' : 'Inactive'}</Tag> },
     {
       title: '', width: 120,

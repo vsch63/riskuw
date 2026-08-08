@@ -18,6 +18,7 @@ import {
 } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import MedicalStandardsPage from './MedicalStandardsPage'
+import { Titled } from '../components/ColHint'
 import { sarConfigAPI } from '../api/client'
 
 const { Option } = Select
@@ -88,17 +89,17 @@ function BenefitsTab({ notify }: { notify: () => void }) {
   }
 
   const cols = [
-    { title: 'Benefit Code', dataIndex: 'benefit_code', render: (v: string) => <span style={mono}>{v}</span> },
-    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
-    { title: 'Type', dataIndex: 'benefit_type', width: 100, render: (v: string) => <Tag color={v === 'BASE' ? 'geekblue' : 'purple'}>{v}</Tag> },
-    { title: 'SAR Formula', dataIndex: 'sar_formula', width: 150, render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
-    { title: 'Exposure Group', dataIndex: 'uw_exposure_group', width: 140 },
-    { title: 'Risk Group', dataIndex: 'risk_group', width: 110 },
-    { title: 'Payer', dataIndex: 'premium_payer', width: 100 },
-    { title: 'In SAR', dataIndex: 'include_in_sar', width: 70, render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>) },
-    { title: 'Seq', dataIndex: 'processing_sequence', width: 60 },
-    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
-    { title: 'Effective', dataIndex: 'effective_date', width: 105, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
+    { title: Titled('Benefit Code', 'benefit_code'), dataIndex: 'benefit_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Ver', 'version'), dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: Titled('Type', 'benefit_type'), dataIndex: 'benefit_type', width: 100, render: (v: string) => <Tag color={v === 'BASE' ? 'geekblue' : 'purple'}>{v}</Tag> },
+    { title: Titled('SAR Formula', 'sar_formula'), dataIndex: 'sar_formula', width: 150, render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
+    { title: Titled('Exposure Group', 'uw_exposure_group'), dataIndex: 'uw_exposure_group', width: 140 },
+    { title: Titled('Risk Group', 'risk_group'), dataIndex: 'risk_group', width: 110 },
+    { title: Titled('Payer', 'premium_payer'), dataIndex: 'premium_payer', width: 100 },
+    { title: Titled('In SAR', 'include_in_sar'), dataIndex: 'include_in_sar', width: 70, render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>) },
+    { title: Titled('Seq', 'processing_sequence'), dataIndex: 'processing_sequence', width: 60 },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: Titled('Effective', 'effective_date'), dataIndex: 'effective_date', width: 105, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
     { title: 'History', key: 'hist', width: 90, render: (_: any, r: any) =>
         <Button size="small" type="link" onClick={() => showHistory(r.benefit_code)}>History</Button> },
   ]
@@ -143,14 +144,14 @@ function BenefitsTab({ notify }: { notify: () => void }) {
           size="small" rowKey="version" loading={histLoading}
           dataSource={hist?.versions || []} pagination={false}
           columns={[
-            { title: 'Version', dataIndex: 'version', width: 70, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
-            { title: 'Current', dataIndex: 'is_current', width: 85, render: (v: boolean) => (v ? <Tag color="green">current</Tag> : <Tag>superseded</Tag>) },
-            { title: 'Effective', dataIndex: 'effective_date', width: 110, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
-            { title: 'Expiry', dataIndex: 'expiry_date', width: 110, render: (v: string) => <span style={mono}>{v || '—'}</span> },
-            { title: 'SAR Formula', dataIndex: 'sar_formula', render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
-            { title: 'Seq', dataIndex: 'processing_sequence', width: 60 },
-            { title: 'By', dataIndex: 'updated_by', width: 110 },
-            { title: 'Changed', dataIndex: 'updated_at', width: 150, render: (v: string) => <span style={mono}>{v ? v.slice(0, 16) : '—'}</span> },
+            { title: Titled('Version', 'version'), dataIndex: 'version', width: 70, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+            { title: Titled('Current', 'is_current'), dataIndex: 'is_current', width: 85, render: (v: boolean) => (v ? <Tag color="green">current</Tag> : <Tag>superseded</Tag>) },
+            { title: Titled('Effective', 'effective_date'), dataIndex: 'effective_date', width: 110, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
+            { title: Titled('Expiry', 'expiry_date'), dataIndex: 'expiry_date', width: 110, render: (v: string) => <span style={mono}>{v || '—'}</span> },
+            { title: Titled('SAR Formula', 'sar_formula'), dataIndex: 'sar_formula', render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
+            { title: Titled('Seq', 'processing_sequence'), dataIndex: 'processing_sequence', width: 60 },
+            { title: Titled('By', 'updated_by'), dataIndex: 'updated_by', width: 110 },
+            { title: Titled('Changed', 'updated_at'), dataIndex: 'updated_at', width: 150, render: (v: string) => <span style={mono}>{v ? v.slice(0, 16) : '—'}</span> },
           ]}
         />
       </Modal>
@@ -185,16 +186,16 @@ function RiskGroupsTab({ notify }: { notify: () => void }) {
   }
   const inr = (v?: number) => v != null ? '₹' + Number(v).toLocaleString('en-IN') : '—'
   const cols = [
-    { title: 'Group', dataIndex: 'group_code', render: (v: string) => <Tag color="cyan" style={mono}>{v}</Tag> },
-    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
-    { title: 'Name', dataIndex: 'group_name', render: (v: string, r: any) =>
+    { title: Titled('Group', 'group_code'), dataIndex: 'group_code', render: (v: string) => <Tag color="cyan" style={mono}>{v}</Tag> },
+    { title: Titled('Ver', 'version'), dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: Titled('Name', 'group_name'), dataIndex: 'group_name', render: (v: string, r: any) =>
       <a onClick={() => openModal(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
-    { title: 'Aggregation', dataIndex: 'aggregation_method', width: 110, render: (v: string) => <span style={mono}>{v}</span> },
-    { title: 'Auto Refer ≥', dataIndex: 'auto_refer_threshold', width: 120, render: inr },
-    { title: 'Senior UW ≥', dataIndex: 'senior_uw_threshold', width: 120, render: inr },
-    { title: 'RI Approve ≥', dataIndex: 'ri_approval_threshold', width: 120, render: inr },
-    { title: 'Decline ≥', dataIndex: 'decline_threshold', width: 120, render: inr },
-    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: Titled('Aggregation', 'aggregation_method'), dataIndex: 'aggregation_method', width: 110, render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Auto Refer ≥', 'auto_refer_threshold'), dataIndex: 'auto_refer_threshold', width: 120, render: inr },
+    { title: Titled('Senior UW ≥', 'senior_uw_threshold'), dataIndex: 'senior_uw_threshold', width: 120, render: inr },
+    { title: Titled('RI Approve ≥', 'ri_approval_threshold'), dataIndex: 'ri_approval_threshold', width: 120, render: inr },
+    { title: Titled('Decline ≥', 'decline_threshold'), dataIndex: 'decline_threshold', width: 120, render: inr },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
   ]
   return (
     <div style={card}>
@@ -240,10 +241,10 @@ function ExposureGroupsTab({ notify }: { notify: () => void }) {
     } catch (e: any) { message.error(e.message) }
   }
   const cols = [
-    { title: 'Exposure', dataIndex: 'exposure_code', render: (v: string) => <Tag color="geekblue" style={mono}>{v}</Tag> },
-    { title: 'Name', dataIndex: 'exposure_name' },
-    { title: 'Description', dataIndex: 'description' },
-    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: Titled('Exposure', 'exposure_code'), dataIndex: 'exposure_code', render: (v: string) => <Tag color="geekblue" style={mono}>{v}</Tag> },
+    { title: Titled('Name', 'exposure_name'), dataIndex: 'exposure_name' },
+    { title: Titled('Description', 'description'), dataIndex: 'description' },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
   ]
   return (
     <div style={card}>
@@ -279,10 +280,10 @@ function AggregationTab({ notify }: { notify: () => void }) {
     } catch (e: any) { message.error(e.message) }
   }
   const cols = [
-    { title: 'Risk Group', dataIndex: 'risk_group_code', render: (v: string) => <Tag color="cyan">{v}</Tag> },
-    { title: 'Exposure Group', dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Any</Tag> },
-    { title: 'Product', dataIndex: 'product_code', render: (v?: string) => v || <Tag>System</Tag> },
-    { title: 'Method', dataIndex: 'aggregation_method', width: 140, render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Risk Group', 'risk_group_code'), dataIndex: 'risk_group_code', render: (v: string) => <Tag color="cyan">{v}</Tag> },
+    { title: Titled('Exposure Group', 'exposure_group'), dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', render: (v?: string) => v || <Tag>System</Tag> },
+    { title: Titled('Method', 'aggregation_method'), dataIndex: 'aggregation_method', width: 140, render: (v: string) => <span style={mono}>{v}</span> },
   ]
   return (
     <div style={card}>
@@ -319,13 +320,13 @@ function FclTab({ notify }: { notify: () => void }) {
     } catch (e: any) { message.error(e.message) }
   }
   const cols = [
-    { title: 'Product', dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
-    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
-    { title: 'Scheme', dataIndex: 'scheme_id', render: (v?: string) => v || <Tag>Any</Tag> },
-    { title: 'Exposure', dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Product</Tag> },
-    { title: 'Basis', dataIndex: 'fcl_basis', width: 90, render: (v: string) => <Tag color={v === 'FORMULA' ? 'purple' : 'blue'}>{v}</Tag> },
-    { title: 'Flat FCL', dataIndex: 'flat_fcl_amount', render: (v?: number) => (v != null ? v.toLocaleString('en-IN') : '—') },
-    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Ver', 'version'), dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: Titled('Scheme', 'scheme_id'), dataIndex: 'scheme_id', render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: Titled('Exposure', 'exposure_group'), dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Product</Tag> },
+    { title: Titled('Basis', 'fcl_basis'), dataIndex: 'fcl_basis', width: 90, render: (v: string) => <Tag color={v === 'FORMULA' ? 'purple' : 'blue'}>{v}</Tag> },
+    { title: Titled('Flat FCL', 'flat_fcl_amount'), dataIndex: 'flat_fcl_amount', render: (v?: number) => (v != null ? v.toLocaleString('en-IN') : '—') },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
   ]
   return (
     <div style={card}>
@@ -374,12 +375,12 @@ function NmlTab({ notify }: { notify: () => void }) {
     } catch (e: any) { message.error(e.message) }
   }
   const cols = [
-    { title: 'Product', dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
-    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
+    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Ver', 'version'), dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
     { title: 'Age', render: (_: any, r: any) => `${r.age_min ?? '≤'}–${r.age_max ?? '∞'}` },
     { title: 'SAR Band', render: (_: any, r: any) => `${(r.sar_min ?? 0).toLocaleString('en-IN')} → ${r.sar_max ? r.sar_max.toLocaleString('en-IN') : '∞'}` },
-    { title: 'Category', dataIndex: 'nml_category', width: 130, render: (v: string) => <Tag color={v === 'NON_MEDICAL' ? 'green' : 'orange'}>{v}</Tag> },
-    { title: 'Tests', dataIndex: 'medical_tests_required', render: (v: string[]) => (v || []).join(', ') || '—' },
+    { title: Titled('Category', 'nml_category'), dataIndex: 'nml_category', width: 130, render: (v: string) => <Tag color={v === 'NON_MEDICAL' ? 'green' : 'orange'}>{v}</Tag> },
+    { title: Titled('Tests', 'medical_tests_required'), dataIndex: 'medical_tests_required', render: (v: string[]) => (v || []).join(', ') || '—' },
   ]
   return (
     <div style={card}>
@@ -433,14 +434,14 @@ function RITab({ notify }: { notify: () => void }) {
   }
   const inr = (v?: number) => v != null ? '₹' + Number(v).toLocaleString('en-IN') : '—'
   const cols = [
-    { title: 'Code', dataIndex: 'reinsurer_code', render: (v: string) => <Tag color="volcano" style={mono}>{v}</Tag> },
-    { title: 'Name', dataIndex: 'reinsurer_name', render: (v: string, r: any) =>
+    { title: Titled('Code', 'reinsurer_code'), dataIndex: 'reinsurer_code', render: (v: string) => <Tag color="volcano" style={mono}>{v}</Tag> },
+    { title: Titled('Name', 'reinsurer_name'), dataIndex: 'reinsurer_name', render: (v: string, r: any) =>
       <a onClick={() => openModal(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
-    { title: 'Retention Limit', dataIndex: 'retention_limit', width: 140, render: inr },
-    { title: 'Products', dataIndex: 'product_codes', render: (v: string[]) => (v || []).map(p =>
+    { title: Titled('Retention Limit', 'retention_limit'), dataIndex: 'retention_limit', width: 140, render: inr },
+    { title: Titled('Products', 'product_codes'), dataIndex: 'product_codes', render: (v: string[]) => (v || []).map(p =>
       <Tag key={p} style={{ marginRight: 4 }}>{p}</Tag>) },
-    { title: 'Treaty', dataIndex: 'treaty_code', render: (v?: string) => v ? <span style={mono}>{v}</span> : '—' },
-    { title: 'Active', dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: Titled('Treaty', 'treaty_code'), dataIndex: 'treaty_code', render: (v?: string) => v ? <span style={mono}>{v}</span> : '—' },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
   ]
   return (
     <div style={card}>

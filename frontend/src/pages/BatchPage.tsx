@@ -8,6 +8,7 @@ import {
   CheckCircleFilled, CloseCircleFilled, LoadingOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 interface BatchJob {
   id: string
@@ -133,7 +134,7 @@ export default function BatchPage() {
       ),
     },
     {
-      title: 'Status',
+      title: Titled('Status', 'status'),
       dataIndex: 'status',
       render: (v: string) => (
         <Tag style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: statusColor(v),

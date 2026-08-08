@@ -16,6 +16,7 @@ import { api } from '../api/client'
 import { useAuthStore } from '../context/authStore'
 import PhysicianRegistryTab from './PhysicianRegistryTab'
 import { GSTModalConfigTab } from './GSTModalConfigTab'
+import { Titled, CellHint } from '../components/ColHint'
 
 // ── sysApi: direct fetch helper for /system/* routes (not proxied via /api) ──
 const _tok = () => localStorage.getItem('riskuw_token') || ''
@@ -494,17 +495,17 @@ function RateTablesTab() {
   }
 
   const cols = [
-    { title:'Gender',    dataIndex:'gender',         width:80  },
-    { title:'Tobacco',   dataIndex:'tobacco_status',  width:120 },
+    { title: Titled('Gender', 'gender'), dataIndex:'gender',         width:80  },
+    { title: Titled('Tobacco', 'tobacco_status'), dataIndex:'tobacco_status',  width:120, render: CellHint('tobacco_status') },
     { title:'Age',       width:80,  render:(_:any,r:Rate) => `${r.age_min}–${r.age_max}` },
-    { title:'Term',      dataIndex:'term_years',      width:70, render:(v:any) => v || '—' },
-    { title:'Risk Class',dataIndex:'risk_class',      width:140 },
-    { title:'Table',     dataIndex:'table_rating',    width:70  },
-    { title:'Rate/$1K',  dataIndex:'rate_per_thou',   width:90  },
-    { title:'Flat Extra',dataIndex:'flat_extra_rate', width:90  },
-    { title:'Effective', dataIndex:'effective_date',  width:110, render:(v:string) => v?.slice(0,10) || '—' },
-    { title:'Expires',   dataIndex:'expiry_date',     width:110, render:(v:string) => v?.slice(0,10) || 'Never' },
-    { title:'Label',     dataIndex:'rate_label',      render:(v:string) => v || '—' },
+    { title: Titled('Term', 'term_years'), dataIndex:'term_years',      width:70, render:(v:any) => v || '—' },
+    { title: Titled('Risk Class', 'risk_class'), dataIndex:'risk_class',      width:140, render: CellHint('risk_class') },
+    { title: Titled('Table', 'table_rating'), dataIndex:'table_rating',    width:70  },
+    { title: Titled('Rate/$1K', 'rate_per_thou'), dataIndex:'rate_per_thou',   width:90  },
+    { title: Titled('Flat Extra', 'flat_extra_rate'), dataIndex:'flat_extra_rate', width:90  },
+    { title: Titled('Effective', 'effective_date'), dataIndex:'effective_date',  width:110, render:(v:string) => v?.slice(0,10) || '—' },
+    { title: Titled('Expires', 'expiry_date'), dataIndex:'expiry_date',     width:110, render:(v:string) => v?.slice(0,10) || 'Never' },
+    { title: Titled('Label', 'rate_label'), dataIndex:'rate_label',      render:(v:string) => v || '—' },
   ]
 
   return (
@@ -518,8 +519,8 @@ function RateTablesTab() {
           ? <div style={{ color:'#6b7280', fontSize:13 }}>No rate tables configured yet. Add rates below or upload a CSV.</div>
           : <Table dataSource={products} rowKey="product_code" size="small" pagination={false}
               columns={[
-                { title:'Product Code', dataIndex:'product_code', render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', color:'#00d4aa', fontWeight:600 }}>{v}</span> },
-                { title:'Rate Count',   dataIndex:'rate_count' },
+                { title: Titled('Product Code', 'product_code'), dataIndex:'product_code', render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', color:'#00d4aa', fontWeight:600 }}>{v}</span> },
+                { title: Titled('Rate Count', 'rate_count'), dataIndex:'rate_count' },
                 { title:'Actions', render:(_:any, p:RatedProduct) => (
                   <div style={{ display:'flex', gap:6 }}>
                     <Button size="small" onClick={() => setSelProd(p.product_code)}
@@ -1250,11 +1251,11 @@ function ErrorCodesTab() {
   }
 
   const cols = [
-    { title:'Code',       dataIndex:'code',     width:100, render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', color:'#fbbf24', fontWeight:600 }}>{v}</span> },
-    { title:'Category',   dataIndex:'category', width:100 },
-    { title:'Severity',   dataIndex:'severity', width:100, render:(v:string) => <Tag color={v==='ERROR'?'error':v==='WARNING'?'warning':'default'}>{v}</Tag> },
-    { title:'Message',    dataIndex:'message'   },
-    { title:'Resolution', dataIndex:'resolution', render:(v:string) => v || '—' },
+    { title: Titled('Code', 'code'), dataIndex:'code',     width:100, render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', color:'#fbbf24', fontWeight:600 }}>{v}</span> },
+    { title: Titled('Category', 'category'), dataIndex:'category', width:100 },
+    { title: Titled('Severity', 'severity'), dataIndex:'severity', width:100, render:(v:string) => <Tag color={v==='ERROR'?'error':v==='WARNING'?'warning':'default'}>{v}</Tag> },
+    { title: Titled('Message', 'message'), dataIndex:'message'   },
+    { title: Titled('Resolution', 'resolution'), dataIndex:'resolution', render:(v:string) => v || '—' },
   ]
 
   return (
@@ -1350,11 +1351,11 @@ function StateCodesTab() {
   }
 
   const cols = [
-    { title:'Country', dataIndex:'country_code', width:80 },
-    { title:'Code', dataIndex:'state_code', width:80,
+    { title: Titled('Country', 'country_code'), dataIndex:'country_code', width:80 },
+    { title: Titled('Code', 'state_code'), dataIndex:'state_code', width:80,
       render:(v:string) => <span style={{ fontFamily:'var(--font-mono, monospace)', fontWeight:700, color:'#00d4aa' }}>{v}</span> },
-    { title:'State / Province', dataIndex:'state_name' },
-    { title:'Active', dataIndex:'is_active', width:80,
+    { title: Titled('State / Province', 'state_name'), dataIndex:'state_name' },
+    { title: Titled('Active', 'is_active'), dataIndex:'is_active', width:80,
       render:(v:boolean, row:StateCode) =>
         <Switch size="small" checked={v} onChange={() => toggleActive(row)} /> },
     { title:'', width:50,
@@ -1851,7 +1852,7 @@ function UWScalesTab() {
 
   const cols = [
     {
-      title:'Scale Name', dataIndex:'name',
+      title: Titled('Scale Name', 'name'), dataIndex:'name',
       render:(v:string,r:UWScale)=>(
         <div>
           <div style={{ fontWeight:600, color:'#e2e8f0', fontSize:13 }}>{v}</div>
@@ -1859,15 +1860,15 @@ function UWScalesTab() {
         </div>
       ),
     },
-    { title:'Type', dataIndex:'scale_type', width:90,
+    { title: Titled('Type', 'scale_type'), dataIndex:'scale_type', width:90,
       render:(v:string)=><Tag color={v==='UW'?'cyan':'gold'} style={{ fontWeight:700, fontSize:11 }}>{v}</Tag> },
-    { title:'Output', dataIndex:'premium_output_type', width:150,
+    { title: Titled('Output', 'premium_output_type'), dataIndex:'premium_output_type', width:150,
       render:(v:string|null)=>v
         ? <span style={{ fontSize:11, color:'#9ca3af' }}>{v==='RATE_PER_THOUSAND'?'Rate / ₹1k SA':'Multiplier'}</span>
         : <span style={{ fontSize:11, color:'#4b5563' }}>Debit Points</span> },
-    { title:'Tranches', dataIndex:'tranche_count', width:90,
+    { title: Titled('Tranches', 'tranche_count'), dataIndex:'tranche_count', width:90,
       render:(v:number)=><span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontWeight:600 }}>{v??0}</span> },
-    { title:'Status', dataIndex:'is_active', width:90,
+    { title: Titled('Status', 'is_active'), dataIndex:'is_active', width:90,
       render:(v:boolean)=><Tag color={v?'success':'default'}>{v?'Active':'Inactive'}</Tag> },
     { title:'Actions', width:200,
       render:(_:any,r:UWScale)=>(
@@ -2311,7 +2312,7 @@ function UserLabelsTab() {
 
   const cols = [
     {
-      title: 'Label Key', dataIndex: 'label_key',
+      title: Titled('Label Key', 'label_key'), dataIndex: 'label_key',
       render: (v: string) => (
         <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
           color: '#00d4aa', background: 'rgba(0,212,170,0.08)',
@@ -2321,7 +2322,7 @@ function UserLabelsTab() {
       ),
     },
     {
-      title: 'Display Name', dataIndex: 'label_name',
+      title: Titled('Display Name', 'label_name'), dataIndex: 'label_name',
       render: (v: string, r: UserLabel) => (
         <div>
           <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13 }}>{v}</div>
@@ -2330,11 +2331,11 @@ function UserLabelsTab() {
       ),
     },
     {
-      title: 'Type', dataIndex: 'data_type', width: 110,
+      title: Titled('Type', 'data_type'), dataIndex: 'data_type', width: 110,
       render: (v: string) => <Tag color={TYPE_COLOR[v]} style={{ fontSize: 11, fontWeight: 600 }}>{v}</Tag>,
     },
     {
-      title: 'Default', dataIndex: 'default_value', width: 120,
+      title: Titled('Default', 'default_value'), dataIndex: 'default_value', width: 120,
       render: (v: string, r: UserLabel) => v ? (
         <span style={{ fontFamily: 'var(--font-mono,monospace)', fontSize: 12, color: '#9ca3af' }}>
           {r.prefix}{v}{r.suffix}
@@ -2351,13 +2352,13 @@ function UserLabelsTab() {
       ),
     },
     {
-      title: 'Required', dataIndex: 'is_required', width: 80,
+      title: Titled('Required', 'is_required'), dataIndex: 'is_required', width: 80,
       render: (v: boolean) => v
         ? <Tag color="orange" style={{ fontSize: 10 }}>Required</Tag>
         : <span style={{ fontSize: 11, color: '#4b5563' }}>Optional</span>,
     },
     {
-      title: 'Status', dataIndex: 'is_active', width: 90,
+      title: Titled('Status', 'is_active'), dataIndex: 'is_active', width: 90,
       render: (v: boolean) => <Tag color={v ? 'success' : 'default'}>{v ? 'Active' : 'Inactive'}</Tag>,
     },
     {
@@ -2500,42 +2501,42 @@ function AIAuditTab() {
     : agreementRate >= 60 ? '#fbbf24' : '#ef4444'
 
   const columns = [
-    { title:'Time', dataIndex:'created_at', width:130,
+    { title: Titled('Time', 'created_at'), dataIndex:'created_at', width:130,
       render:(v:string) => <span style={{ fontSize:11, color:'#6b7280', fontFamily:'var(--font-mono,monospace)' }}>{v?.slice(0,16).replace('T',' ')}</span> },
-    { title:'Source', dataIndex:'source', width:120,
+    { title: Titled('Source', 'source'), dataIndex:'source', width:120,
       render:(v:string) => <Tag style={{ fontSize:10 }}>{SOURCE_LABEL[v]||v}</Tag> },
-    { title:'Engine', dataIndex:'engine', width:120,
+    { title: Titled('Engine', 'engine'), dataIndex:'engine', width:120,
       render:(v:string) => <Tag style={{ fontSize:10, color:'#00d4aa', borderColor:'rgba(0,212,170,0.3)', background:'rgba(0,212,170,0.08)' }}>{ENGINE_LABEL[v]||v}</Tag> },
-    { title:'Applicant', dataIndex:'applicant_ref', width:130,
+    { title: Titled('Applicant', 'applicant_ref'), dataIndex:'applicant_ref', width:130,
       render:(v:string, r:any) => (
         <div>
           <div style={{ fontSize:12, color:'#e2e8f0', fontFamily:'var(--font-mono,monospace)' }}>{v}</div>
           <div style={{ fontSize:10, color:'#6b7280' }}>{r.product_code}</div>
         </div>
       ) },
-    { title:'Risk Tier', dataIndex:'risk_tier', width:110,
+    { title: Titled('Risk Tier', 'risk_tier'), dataIndex:'risk_tier', width:110,
       render:(v:string) => v ? (
         <Tag style={{ color:TIER_COLOR[v]||'#9ca3af', borderColor:(TIER_COLOR[v]||'#9ca3af')+'40',
           background:(TIER_COLOR[v]||'#9ca3af')+'15', fontSize:10 }}>{v}</Tag>
       ) : <span style={{ color:'#4b5563' }}>—</span> },
-    { title:'Score', dataIndex:'risk_score', width:70,
+    { title: Titled('Score', 'risk_score'), dataIndex:'risk_score', width:70,
       render:(v:number) => v!=null ? <span style={{ fontFamily:'var(--font-mono,monospace)', fontSize:12, color:'#fbbf24' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span> },
-    { title:'AI Rec.', dataIndex:'recommendation', width:100,
+    { title: Titled('AI Rec.', 'recommendation'), dataIndex:'recommendation', width:100,
       render:(v:string) => v ? (
         <Tag color={v==='APPROVE'?'success':v==='DECLINE'?'error':'warning'} style={{ fontSize:10 }}>{v}</Tag>
       ) : <span style={{ color:'#4b5563' }}>—</span> },
-    { title:'Rules Outcome', dataIndex:'rules_outcome', width:140,
+    { title: Titled('Rules Outcome', 'rules_outcome'), dataIndex:'rules_outcome', width:140,
       render:(v:string) => v ? <span style={{ fontSize:11, color:'#9ca3af' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span> },
-    { title:'Human Decision', dataIndex:'human_decision', width:150,
+    { title: Titled('Human Decision', 'human_decision'), dataIndex:'human_decision', width:150,
       render:(v:string) => v ? (
         <Tag color={v.includes('APPROV')?'success':v.includes('DECLIN')?'error':'default'} style={{ fontSize:10 }}>{v}</Tag>
       ) : <span style={{ fontSize:11, color:'#4b5563' }}>Pending</span> },
-    { title:'Match', dataIndex:'matches_ai', width:90,
+    { title: Titled('Match', 'matches_ai'), dataIndex:'matches_ai', width:90,
       render:(v:boolean|null) => v===null||v===undefined
         ? <span style={{ color:'#4b5563', fontSize:11 }}>—</span>
         : v ? <span style={{ color:'#22c55e', fontSize:12 }}>✓ Match</span>
             : <span style={{ color:'#ef4444', fontSize:12 }}>✗ Override</span> },
-    { title:'By', dataIndex:'requested_by', width:100,
+    { title: Titled('By', 'requested_by'), dataIndex:'requested_by', width:100,
       render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v||'—'}</span> },
   ]
 

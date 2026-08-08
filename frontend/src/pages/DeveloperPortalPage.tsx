@@ -9,6 +9,7 @@ import {
   BookOutlined, BarChartOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { useCurrency } from '../context/CurrencyContext'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -93,7 +94,7 @@ function APIKeysTab() {
 
   const columns = [
     {
-      title: 'Name', dataIndex: 'name',
+      title: Titled('Name', 'name'), dataIndex: 'name',
       render: (v: string, r: any) => (
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>{v}</div>
@@ -102,7 +103,7 @@ function APIKeysTab() {
       ),
     },
     {
-      title: 'Environment', dataIndex: 'environment', width: 110,
+      title: Titled('Environment', 'environment'), dataIndex: 'environment', width: 110,
       render: (v: string) => (
         <Tag color={v === 'live' ? 'success' : 'default'} style={{ fontSize: 10 }}>
           {v === 'live' ? '🟢 LIVE' : '🧪 SANDBOX'}
@@ -110,21 +111,21 @@ function APIKeysTab() {
       ),
     },
     {
-      title: 'Status', dataIndex: 'is_active', width: 100,
+      title: Titled('Status', 'is_active'), dataIndex: 'is_active', width: 100,
       render: (v: boolean) => v
         ? <Tag color="success" icon={<CheckCircleOutlined />}>Active</Tag>
         : <Tag color="error" icon={<CloseCircleOutlined />}>Revoked</Tag>,
     },
     {
-      title: 'Requests', dataIndex: 'request_count', width: 90,
+      title: Titled('Requests', 'request_count'), dataIndex: 'request_count', width: 90,
       render: (v: number) => <span style={{ fontFamily: 'var(--font-mono,monospace)', fontSize: 12 }}>{v ?? 0}</span>,
     },
     {
-      title: 'Last Used', dataIndex: 'last_used_at', width: 140,
+      title: Titled('Last Used', 'last_used_at'), dataIndex: 'last_used_at', width: 140,
       render: (v: string) => v ? <span style={{ fontSize: 11, color: '#6b7280' }}>{v.slice(0, 16).replace('T', ' ')}</span> : <span style={{ color: '#4b5563' }}>Never</span>,
     },
     {
-      title: 'Created', dataIndex: 'created_at', width: 140,
+      title: Titled('Created', 'created_at'), dataIndex: 'created_at', width: 140,
       render: (v: string) => <span style={{ fontSize: 11, color: '#6b7280' }}>{v?.slice(0, 16).replace('T', ' ')} by {''}</span>,
     },
     {
@@ -366,13 +367,13 @@ function UsageTab() {
   const pct          = limit > 0 ? Math.min(100, Math.round((monthTotal / limit) * 100)) : 0
 
   const columns = [
-    { title: 'Date', dataIndex: 'usage_date', width: 120,
+    { title: Titled('Date', 'usage_date'), dataIndex: 'usage_date', width: 120,
       render: (v: string) => <span style={{ fontSize: 12, color: '#9ca3af' }}>{v}</span> },
-    { title: 'Endpoint', dataIndex: 'endpoint',
+    { title: Titled('Endpoint', 'endpoint'), dataIndex: 'endpoint',
       render: (v: string) => <code style={{ fontSize: 11, color: '#00d4aa' }}>{v}</code> },
-    { title: 'Requests', dataIndex: 'requests', width: 100,
+    { title: Titled('Requests', 'requests'), dataIndex: 'requests', width: 100,
       render: (v: number) => <span style={{ fontFamily: 'var(--font-mono,monospace)', fontSize: 12 }}>{v}</span> },
-    { title: 'Errors', dataIndex: 'errors', width: 100,
+    { title: Titled('Errors', 'errors'), dataIndex: 'errors', width: 100,
       render: (v: number) => <span style={{ fontFamily: 'var(--font-mono,monospace)', fontSize: 12, color: v > 0 ? '#ef4444' : '#6b7280' }}>{v}</span> },
   ]
 

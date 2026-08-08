@@ -3,6 +3,7 @@ import {
   Table, Tag, Button, Select, Spin, Tabs, Badge, Switch,
   message, Input, Collapse, Modal, Form,
 } from 'antd'
+import { Titled } from '../components/ColHint'
 import {
   CheckCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined,
   ClockCircleOutlined, SafetyCertificateOutlined, ReloadOutlined,
@@ -437,31 +438,31 @@ function VerificationHistoryTab() {
   }
 
   const columns = [
-    { title:'Type', dataIndex:'integration_type', width:120,
+    { title: Titled('Type', 'integration_type'), dataIndex:'integration_type', width:120,
       render:(v:string) => {
         const m = TYPE_META[v] || { icon:'🔌', label:v, color:'#94a3b8' }
         return <span style={{ color:m.color }}>{m.icon} {v}</span>
       }},
-    { title:'Provider', dataIndex:'provider_code', width:140,
+    { title: Titled('Provider', 'provider_code'), dataIndex:'provider_code', width:140,
       render:(v:string) => <Tag style={{ fontSize:10 }}>{v}</Tag> },
-    { title:'KYC', dataIndex:'kyc_verified', width:70,
+    { title: Titled('KYC', 'kyc_verified'), dataIndex:'kyc_verified', width:70,
       render:(v:boolean|null, r:any) => r.integration_type !== 'IDENTITY' ? '—' :
         v===null?'—':v?<CheckCircleOutlined style={{ color:'#22c55e'}}/>:<CloseCircleOutlined style={{ color:'#ef4444'}}/> },
-    { title:'Credit', dataIndex:'credit_score', width:80,
+    { title: Titled('Credit', 'credit_score'), dataIndex:'credit_score', width:80,
       render:(v:number) => v ? <strong style={{ color:v>=750?'#22c55e':v>=650?'#fbbf24':'#ef4444' }}>{v}</strong> : '—' },
-    { title:'AML', dataIndex:'aml_status', width:110,
+    { title: Titled('AML', 'aml_status'), dataIndex:'aml_status', width:110,
       render:(v:string) => v ? <Tag color={v==='CLEAR'?'success':v==='HIT'?'error':'warning'} style={{ fontSize:10 }}>{v}</Tag>:'—' },
-    { title:'Confidence', dataIndex:'confidence_score', width:100,
+    { title: Titled('Confidence', 'confidence_score'), dataIndex:'confidence_score', width:100,
       render:(v:number) => `${Math.round((v||0)*100)}%` },
-    { title:'Verified', dataIndex:'verified_at', width:140,
+    { title: Titled('Verified', 'verified_at'), dataIndex:'verified_at', width:140,
       render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v?.slice(0,16).replace('T',' ')}</span> },
-    { title:'Expires', dataIndex:'expires_at', width:120,
+    { title: Titled('Expires', 'expires_at'), dataIndex:'expires_at', width:120,
       render:(v:string) => {
         if (!v) return '—'
         const expired = new Date(v) < new Date()
         return <span style={{ fontSize:11, color:expired?'#ef4444':'#6b7280' }}>{v?.slice(0,10)}</span>
       }},
-    { title:'By', dataIndex:'requested_by', width:100,
+    { title: Titled('By', 'requested_by'), dataIndex:'requested_by', width:100,
       render:(v:string) => <span style={{ fontSize:11, color:'#6b7280' }}>{v||'—'}</span> },
   ]
 

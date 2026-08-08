@@ -10,6 +10,7 @@ import {
   FileTextOutlined, StopOutlined, RedoOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled, CellHint } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -107,20 +108,20 @@ function PolicyListTab() {
         onRow={(r: any) => ({ onClick: () => setSelected(r.id), style: { cursor: 'pointer' } })}
         pagination={{ current: page, pageSize: 30, total, onChange: (p: number) => setPage(p), showSizeChanger: false }}
         columns={[
-          { title: 'Policy Number', dataIndex: 'policy_number', width: 160,
+          { title: Titled('Policy Number', 'policy_number'), dataIndex: 'policy_number', width: 160,
             render: (v: string) => <code style={{ fontSize: 12, color: '#00d4aa', fontWeight: 600 }}>{v}</code> },
           { title: 'Applicant', width: 180,
             render: (_: any, r: any) => r.applicant_name || r.applicant_ref },
-          { title: 'Product', dataIndex: 'product_code', width: 130 },
-          { title: 'Sum Assured', dataIndex: 'sum_assured', width: 130,
+          { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 130 },
+          { title: Titled('Sum Assured', 'sum_assured'), dataIndex: 'sum_assured', width: 130,
             render: (v: number) => `₹${Number(v).toLocaleString('en-IN')}` },
-          { title: 'Premium', dataIndex: 'annual_premium', width: 120,
+          { title: Titled('Premium', 'annual_premium'), dataIndex: 'annual_premium', width: 120,
             render: (v: number) => `₹${Number(v).toLocaleString('en-IN')}` },
-          { title: 'Status', dataIndex: 'status', width: 150,
+          { title: Titled('Status', 'status'), dataIndex: 'status', width: 150,
             render: (v: string) => <Tag color={STATUS_COLOR[v] || 'default'}>{STATUS_LABEL[v] || v}</Tag> },
-          { title: 'Next Premium Due', dataIndex: 'next_premium_due', width: 140,
+          { title: Titled('Next Premium Due', 'next_premium_due'), dataIndex: 'next_premium_due', width: 140,
             render: (v: string) => v || '—' },
-          { title: 'Issue Date', dataIndex: 'issue_date', width: 120,
+          { title: Titled('Issue Date', 'issue_date'), dataIndex: 'issue_date', width: 120,
             render: (v: string) => v || '—' },
         ]}
       />
@@ -282,13 +283,13 @@ function PolicyDetailDrawer({ policyId, onClose, onUpdate }: {
               dataSource={data.premium_history} rowKey={(r: any) => r.due_date + r.receipt_number}
               size="small" pagination={false} style={{ marginBottom: 24 }}
               columns={[
-                { title: 'Due Date', dataIndex: 'due_date', width: 110 },
-                { title: 'Paid Date', dataIndex: 'paid_date', width: 110, render: (v: string) => v || '—' },
-                { title: 'Amount', dataIndex: 'amount_paid', width: 110,
+                { title: Titled('Due Date', 'due_date'), dataIndex: 'due_date', width: 110 },
+                { title: Titled('Paid Date', 'paid_date'), dataIndex: 'paid_date', width: 110, render: (v: string) => v || '—' },
+                { title: Titled('Amount', 'amount_paid'), dataIndex: 'amount_paid', width: 110,
                   render: (v: number) => v ? `₹${Number(v).toLocaleString('en-IN')}` : '—' },
-                { title: 'Mode', dataIndex: 'payment_mode', width: 100 },
-                { title: 'Receipt', dataIndex: 'receipt_number', width: 110 },
-                { title: 'Status', dataIndex: 'status', width: 90,
+                { title: Titled('Mode', 'payment_mode'), dataIndex: 'payment_mode', width: 100, render: CellHint('payment_mode') },
+                { title: Titled('Receipt', 'receipt_number'), dataIndex: 'receipt_number', width: 110 },
+                { title: Titled('Status', 'status'), dataIndex: 'status', width: 90,
                   render: (v: string) => <Tag color={v === 'PAID' ? 'success' : 'default'} style={{ fontSize: 10 }}>{v}</Tag> },
               ]}
             />

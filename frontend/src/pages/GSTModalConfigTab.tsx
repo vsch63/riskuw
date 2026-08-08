@@ -9,6 +9,7 @@ import {
 } from "@ant-design/icons";
 import { api } from '../api/client';
 import dayjs from "dayjs";
+import { Titled } from '../components/ColHint';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface GSTRow {
@@ -137,15 +138,15 @@ function GSTPanel({ productCode }: { productCode?: string }) {
   };
 
   const columns = [
-    { title: "Source",   dataIndex: "source",
+    { title: Titled("Source", 'source'), dataIndex: "source",
       render: (v: string) => <SourceTag source={v} />, width: 100 },
-    { title: "Category", dataIndex: "category", width: 100 },
-    { title: "1st Year", dataIndex: "first_year_rate",
+    { title: Titled("Category", 'category'), dataIndex: "category", width: 100 },
+    { title: Titled("1st Year", 'first_year_rate'), dataIndex: "first_year_rate",
       render: (v: number) => <strong>{v}%</strong>, width: 90 },
-    { title: "Renewal",  dataIndex: "renewal_rate",
+    { title: Titled("Renewal", 'renewal_rate'), dataIndex: "renewal_rate",
       render: (v: number) => `${v}%`, width: 90 },
-    { title: "Effective Date", dataIndex: "effective_date", width: 120 },
-    { title: "Expiry Date",    dataIndex: "expiry_date",
+    { title: Titled("Effective Date", 'effective_date'), dataIndex: "effective_date", width: 120 },
+    { title: Titled("Expiry Date", 'expiry_date'), dataIndex: "expiry_date",
       render: (v: string | null) => v ?? <span style={{ color: "#888" }}>Open-ended</span>,
       width: 120 },
     { title: "Status", render: (_: any, row: GSTRow) => <StatusTag row={row} />, width: 100 },
@@ -315,14 +316,14 @@ function ModalPanel({ productCode }: { productCode?: string }) {
   };
 
   const columns = [
-    { title: "Source", dataIndex: "source",
+    { title: Titled("Source", 'source'), dataIndex: "source",
       render: (v: string) => <SourceTag source={v} />, width: 100 },
-    { title: "Mode", dataIndex: "mode",
+    { title: Titled("Mode", 'mode'), dataIndex: "mode",
       render: (v: string) => MODE_LABELS[v] || v, width: 120 },
-    { title: "Factor", dataIndex: "factor",
+    { title: Titled("Factor", 'factor'), dataIndex: "factor",
       render: (v: number) => <strong>{v.toFixed(4)}</strong>, width: 90 },
-    { title: "Effective Date", dataIndex: "effective_date", width: 120 },
-    { title: "Expiry Date", dataIndex: "expiry_date",
+    { title: Titled("Effective Date", 'effective_date'), dataIndex: "effective_date", width: 120 },
+    { title: Titled("Expiry Date", 'expiry_date'), dataIndex: "expiry_date",
       render: (v: string | null) => v ?? <span style={{ color: "#888" }}>Open-ended</span>,
       width: 120 },
     { title: "Status",

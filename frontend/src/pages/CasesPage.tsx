@@ -4,6 +4,7 @@ import { SearchOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/
 import { uwAPI } from '../api/client'
 import { useCurrency } from '../context/CurrencyContext'
 import type { QueueCase } from '../types'
+import { Titled } from '../components/ColHint'
 
 const outcomeColor = (o?: string) => {
   if (!o) return 'default'
@@ -84,19 +85,19 @@ export default function CasesPage() {
 
   const columns = [
     {
-      title: 'Ref', dataIndex: 'applicant_ref', key: 'ref',
+      title: Titled('Ref', 'applicant_ref'), dataIndex: 'applicant_ref', key: 'ref',
       render: (v: string) => (
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{v ?? '—'}</span>
       ),
     },
     {
-      title: 'Product', dataIndex: 'product_code', key: 'product',
+      title: Titled('Product', 'product_code'), dataIndex: 'product_code', key: 'product',
       render: (v: string) => (
         <Tag style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{v ?? '—'}</Tag>
       ),
     },
     {
-      title: 'Face Amount', dataIndex: 'face_amount', key: 'face',
+      title: Titled('Face Amount', 'face_amount'), dataIndex: 'face_amount', key: 'face',
       render: (v: number) => (
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
           {v ? fmt(v) : '—'}
@@ -104,7 +105,7 @@ export default function CasesPage() {
       ),
     },
     {
-      title: 'Outcome', dataIndex: 'outcome', key: 'outcome',
+      title: Titled('Outcome', 'outcome'), dataIndex: 'outcome', key: 'outcome',
       render: (v: string) => (
         <Tag color={outcomeColor(v)}
           style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em' }}>
@@ -113,13 +114,13 @@ export default function CasesPage() {
       ),
     },
     {
-      title: 'Risk Class', dataIndex: 'risk_class', key: 'risk',
+      title: Titled('Risk Class', 'risk_class'), dataIndex: 'risk_class', key: 'risk',
       render: (v: string) => (
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--teal-400)' }}>{v ?? '—'}</span>
       ),
     },
     {
-      title: 'Debit Pts', dataIndex: 'net_debit_points', key: 'debits',
+      title: Titled('Debit Pts', 'net_debit_points'), dataIndex: 'net_debit_points', key: 'debits',
       render: (v: number) => (
         <span style={{
           fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 12,
@@ -130,7 +131,7 @@ export default function CasesPage() {
       ),
     },
     {
-      title: 'Status', dataIndex: 'status', key: 'status',
+      title: Titled('Status', 'status'), dataIndex: 'status', key: 'status',
       render: (v: string) => v ? <Tag color="blue" style={{ fontSize: 10 }}>{v}</Tag> : null,
     },
     {

@@ -9,6 +9,7 @@ import {
   TeamOutlined, LockOutlined, SearchOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 import { useAuthStore } from '../context/authStore'
 
 const { Option } = Select
@@ -191,7 +192,7 @@ function AllUsersTab({ refresh }: { refresh: number }) {
 
   const cols = [
     {
-      title: 'User', dataIndex: 'username', width: 220,
+      title: Titled('User', 'username'), dataIndex: 'username', width: 220,
       render: (v: string, u: User) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Avatar username={v} role={u.role}/>
@@ -203,15 +204,15 @@ function AllUsersTab({ refresh }: { refresh: number }) {
       ),
     },
     {
-      title: 'Email', dataIndex: 'email', width: 200,
+      title: Titled('Email', 'email'), dataIndex: 'email', width: 200,
       render: (v: string) => <span style={{ fontSize: 12, color: '#9ca3af' }}>{v}</span>,
     },
     {
-      title: 'Role', dataIndex: 'role', width: 160,
+      title: Titled('Role', 'role'), dataIndex: 'role', width: 160,
       render: (v: string) => <RoleBadge role={v}/>,
     },
     {
-      title: 'Status', dataIndex: 'is_active', width: 100,
+      title: Titled('Status', 'is_active'), dataIndex: 'is_active', width: 100,
       render: (v: boolean) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: v ? '#22c55e' : '#ef4444', display: 'inline-block' }}/>
@@ -220,11 +221,11 @@ function AllUsersTab({ refresh }: { refresh: number }) {
       ),
     },
     {
-      title: 'Last Login', dataIndex: 'last_login_at', width: 120,
+      title: Titled('Last Login', 'last_login_at'), dataIndex: 'last_login_at', width: 120,
       render: (v: string) => <span style={{ fontSize: 12, color: '#6b7280' }}>{relTime(v)}</span>,
     },
     ...(me?.role === 'super_admin' ? [{
-      title: 'Tenant', dataIndex: 'tenant_name', width: 150,
+      title: Titled('Tenant', 'tenant_name'), dataIndex: 'tenant_name', width: 150,
       render: (v: string, u: User) => (
         <div>
           <div style={{ fontSize: 12, color: '#9ca3af' }}>{v || '—'}</div>
@@ -688,7 +689,7 @@ function MFATab({ users, loading }: { users: User[], loading: boolean }) {
 
   const cols = [
     {
-      title: 'User', dataIndex: 'username', width: 220,
+      title: Titled('User', 'username'), dataIndex: 'username', width: 220,
       render: (v: string, u: User) => (
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <Avatar username={v} role={u.role}/>
@@ -699,15 +700,15 @@ function MFATab({ users, loading }: { users: User[], loading: boolean }) {
         </div>
       ),
     },
-    { title:'Role', dataIndex:'role', width:160, render:(v:string)=><RoleBadge role={v}/> },
+    { title: Titled('Role', 'role'), dataIndex:'role', width:160, render:(v:string)=><RoleBadge role={v}/> },
     {
-      title: 'MFA Required', dataIndex: 'role', width: 140,
+      title: Titled('MFA Required', 'role'), dataIndex: 'role', width: 140,
       render: (v: string) => MFA_REQUIRED_ROLES.includes(v)
         ? <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:12, color:'#c084fc' }}><SafetyOutlined/> Required</span>
         : <span style={{ fontSize:12, color:'#6b7280' }}>Optional</span>,
     },
     {
-      title: 'Status', dataIndex: 'is_active', width: 100,
+      title: Titled('Status', 'is_active'), dataIndex: 'is_active', width: 100,
       render: (v: boolean) => (
         <span style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12 }}>
           <span style={{ width:7, height:7, borderRadius:'50%', background: v?'#22c55e':'#ef4444', display:'inline-block' }}/>

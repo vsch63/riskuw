@@ -8,6 +8,7 @@ import {
   LinkOutlined, SettingOutlined, BookOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 const { TextArea } = Input
@@ -95,14 +96,14 @@ function RuleLibraryTab() {
   })
 
   const cols = [
-    { title:'Rule ID',   dataIndex:'rule_id',   width:100, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontWeight:600 }}>{v}</span> },
-    { title:'Rule Name', dataIndex:'rule_name'  },
-    { title:'Category',  dataIndex:'category',  width:140 },
-    { title:'Debits',    dataIndex:'debit_points',  width:80  },
-    { title:'Credits',   dataIndex:'credit_points', width:80  },
-    { title:'Flat Extra',dataIndex:'flat_extra', width:100, render:(v:number) => v ? `$${v}/K` : '—' },
-    { title:'Hard Stop', dataIndex:'hard_stop',  width:90,  render:(v:boolean) => v ? <Tag color="error">🔴</Tag> : '' },
-    { title:'APS',       dataIndex:'requires_aps', width:70, render:(v:boolean) => v ? <Tag color="purple">📋</Tag> : '' },
+    { title:Titled('Rule ID','rule_id'),   dataIndex:'rule_id',   width:100, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontWeight:600 }}>{v}</span> },
+    { title:Titled('Rule Name','rule_name'), dataIndex:'rule_name'  },
+    { title:Titled('Category','category'),  dataIndex:'category',  width:140 },
+    { title:Titled('Debits','debit_points'),  dataIndex:'debit_points',  width:80  },
+    { title:Titled('Credits','credit_points'), dataIndex:'credit_points', width:80  },
+    { title:Titled('Flat Extra','flat_extra'), dataIndex:'flat_extra', width:100, render:(v:number) => v ? `$${v}/K` : '—' },
+    { title:Titled('Hard Stop','hard_stop'), dataIndex:'hard_stop',  width:90,  render:(v:boolean) => v ? <Tag color="error">🔴</Tag> : '' },
+    { title:Titled('APS','requires_aps'), dataIndex:'requires_aps', width:70, render:(v:boolean) => v ? <Tag color="purple">📋</Tag> : '' },
   ]
 
   return (
@@ -192,17 +193,17 @@ function CustomRulesTab({ rules, loading, onRefresh }: {
   }
 
   const cols = [
-    { title:'Status', dataIndex:'status', width:130,
+    { title:Titled('Status','status'), dataIndex:'status', width:130,
       render:(v:string) => <Tag style={{ background:STATUS_COLOR[v]||'#64748b', color:'#fff', border:'none', fontSize:11 }}>
         {STATUS_EMOJI[v]||''} {v}
       </Tag> },
-    { title:'Code', dataIndex:'rule_code', width:110,
+    { title:Titled('Code','rule_code'), dataIndex:'rule_code', width:110,
       render:(v:string, r:CustomRule) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontWeight:600 }}>{v || r.rule_id}</span> },
-    { title:'Name', dataIndex:'rule_name' },
-    { title:'Category', dataIndex:'category', width:110 },
-    { title:'Debits', dataIndex:'debit_points', width:70 },
-    { title:'Hard Stop', dataIndex:'hard_stop', width:90, render:(v:boolean) => v ? <Tag color="error">YES</Tag> : '' },
-    { title:'Effective', dataIndex:'effective_date', width:110, render:(v:string) => v?.slice(0,10) || 'Immediate' },
+    { title:Titled('Name','rule_name'), dataIndex:'rule_name' },
+    { title:Titled('Category','category'), dataIndex:'category', width:110 },
+    { title:Titled('Debits','debit_points'), dataIndex:'debit_points', width:70 },
+    { title:Titled('Hard Stop','hard_stop'), dataIndex:'hard_stop', width:90, render:(v:boolean) => v ? <Tag color="error">YES</Tag> : '' },
+    { title:Titled('Effective','effective_date'), dataIndex:'effective_date', width:110, render:(v:string) => v?.slice(0,10) || 'Immediate' },
     { title:'Actions', width:150,
       render:(_:any, r:CustomRule) => (
         <div style={{ display:'flex', gap:5 }}>
@@ -599,9 +600,9 @@ function AssignToProductTab() {
   }
 
   const cols = [
-    { title:'Rule ID', dataIndex:'rule_id', width:120, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</span> },
-    { title:'Rule Name', dataIndex:'rule_name', render:(v:string) => v || '—' },
-    { title:'Enabled', dataIndex:'is_enabled', width:110, render:(v:boolean) => <Tag color={v?'success':'error'}>{v?'✅ Enabled':'🔴 Disabled'}</Tag> },
+    { title:Titled('Rule ID','rule_id'), dataIndex:'rule_id', width:120, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</span> },
+    { title:Titled('Rule Name','rule_name'), dataIndex:'rule_name', render:(v:string) => v || '—' },
+    { title:Titled('Enabled','is_enabled'), dataIndex:'is_enabled', width:110, render:(v:boolean) => <Tag color={v?'success':'error'}>{v?'✅ Enabled':'🔴 Disabled'}</Tag> },
   ]
 
   return (
@@ -691,10 +692,10 @@ function ManageFieldsTab({ customFields, onRefresh }: { customFields: CustomFiel
   }
 
   const cols = [
-    { title:'Field', dataIndex:'field', render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</span> },
-    { title:'Source', dataIndex:'source', width:110 },
-    { title:'Type',   dataIndex:'type',   width:100 },
-    { title:'Description', dataIndex:'description' },
+    { title:Titled('Field','field'), dataIndex:'field', render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa' }}>{v}</span> },
+    { title:Titled('Source','source'), dataIndex:'source', width:110 },
+    { title:Titled('Type','type'),   dataIndex:'type',   width:100 },
+    { title:Titled('Description','description'), dataIndex:'description' },
     { title:'', width:60, render:(_:any, r:any) => r.source === '✏️ Custom' ? (
       <Popconfirm title={`Remove field ${r.field}?`} onConfirm={() => remove(r.field)} okText="Remove" cancelText="No">
         <Button size="small" danger icon={<DeleteOutlined/>}/>

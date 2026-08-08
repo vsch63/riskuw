@@ -13,6 +13,7 @@ import {
   CheckCircleOutlined, ExclamationCircleOutlined
 } from "@ant-design/icons"
 import { api } from "../api/client"
+import { Titled } from "../components/ColHint"
 import dayjs from "dayjs"
 
 const { Option } = Select
@@ -284,9 +285,9 @@ function UploadTab() {
           size="small"
           pagination={false}
           columns={[
-            { title: "Column", dataIndex: "col",
+            { title: Titled("Column", 'col'), dataIndex: "col",
               render: v => <code style={{ color: "#34d399", fontSize: 11 }}>{v}</code> },
-            { title: "Notes", dataIndex: "note",
+            { title: Titled("Notes", 'note'), dataIndex: "note",
               render: v => <span style={{ color: "#9ca3af", fontSize: 11 }}>{v}</span> },
           ]}
         />
@@ -613,21 +614,21 @@ function HistoryTab() {
   useEffect(() => { load() }, [])
 
   const columns = [
-    { title: "Ref",      dataIndex: "upload_ref", width: 100,
+    { title: Titled("Ref", 'upload_ref'), dataIndex: "upload_ref", width: 100,
       render: (v: string) => <code style={{ color: "#00d4aa" }}>{v}</code> },
-    { title: "Filename", dataIndex: "filename",   width: 200 },
-    { title: "Total",    dataIndex: "total_rows", width: 70,  align: "center" as const },
-    { title: "Inserted", dataIndex: "inserted",   width: 80,  align: "center" as const,
+    { title: Titled("Filename", 'filename'), dataIndex: "filename",   width: 200 },
+    { title: Titled("Total", 'total_rows'), dataIndex: "total_rows", width: 70,  align: "center" as const },
+    { title: Titled("Inserted", 'inserted'), dataIndex: "inserted",   width: 80,  align: "center" as const,
       render: (v: number) => <span style={{ color: "#34d399", fontWeight: 600 }}>{v}</span> },
-    { title: "Updated",  dataIndex: "updated",    width: 80,  align: "center" as const,
+    { title: Titled("Updated", 'updated'), dataIndex: "updated",    width: 80,  align: "center" as const,
       render: (v: number) => <span style={{ color: "#60a5fa", fontWeight: 600 }}>{v}</span> },
-    { title: "Skipped",  dataIndex: "skipped",    width: 80,  align: "center" as const },
-    { title: "Errors",   dataIndex: "errors",     width: 70,  align: "center" as const,
+    { title: Titled("Skipped", 'skipped'), dataIndex: "skipped",    width: 80,  align: "center" as const },
+    { title: Titled("Errors", 'errors'), dataIndex: "errors",     width: 70,  align: "center" as const,
       render: (v: number) => <span style={{ color: v > 0 ? "#f87171" : "#6b7280" }}>{v}</span> },
-    { title: "Uploaded By", dataIndex: "uploaded_by", width: 120 },
-    { title: "Date", dataIndex: "uploaded_at", width: 160,
+    { title: Titled("Uploaded By", 'uploaded_by'), dataIndex: "uploaded_by", width: 120 },
+    { title: Titled("Date", 'uploaded_at'), dataIndex: "uploaded_at", width: 160,
       render: (v: string) => v?.slice(0, 16).replace("T", " ") },
-    { title: "Notes", dataIndex: "notes",
+    { title: Titled("Notes", 'notes'), dataIndex: "notes",
       render: (v: string | null) => v || "—" },
   ]
 

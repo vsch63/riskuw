@@ -8,6 +8,7 @@ import {
   CloseCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined,
   PlusOutlined, SendOutlined,
 } from '@ant-design/icons'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 const { TextArea } = Input
@@ -107,7 +108,7 @@ export default function WorkbenchPage() {
       )
     },
     {
-      title: 'Applicant', dataIndex: 'applicant_ref',
+      title: Titled('Applicant', 'applicant_ref'), dataIndex: 'applicant_ref',
       render: (v:string, c:QueueCase) => (
         <div>
           <div style={{ fontWeight:600, color:'#e2e8f0', fontSize:13 }}>{c.applicant_name || v}</div>
@@ -129,7 +130,7 @@ export default function WorkbenchPage() {
       render: (_:any,c:QueueCase) => <span style={{ fontSize:12, color:'#9ca3af' }}>{c.age} / {c.gender?.[0]}</span>
     },
     {
-      title: 'NDP', dataIndex:'net_debit_points', width:60,
+      title: Titled('NDP', 'net_debit_points'), dataIndex:'net_debit_points', width:60,
       render: (v:number) => <span style={{ fontFamily:'var(--font-mono,monospace)', fontSize:12, color:'#fbbf24' }}>{v}</span>
     },
     {
@@ -142,7 +143,7 @@ export default function WorkbenchPage() {
       )
     },
     {
-      title: 'Assigned To', dataIndex:'assigned_to', width:140,
+      title: Titled('Assigned To', 'assigned_to'), dataIndex:'assigned_to', width:140,
       render: (v:string) => v ? <span style={{ fontSize:12, color:'#9ca3af' }}>{v}</span> : <span style={{ color:'#4b5563', fontSize:12 }}>Unassigned</span>
     },
     {
@@ -254,13 +255,13 @@ export default function WorkbenchPage() {
             dataSource={sla.breached_cases} rowKey="case_ref_id" size="small"
             pagination={false}
             columns={[
-              { title: 'Case', dataIndex: 'case_ref_id', width: 60 },
-              { title: 'Applicant', dataIndex: 'applicant_name' },
-              { title: 'Product', dataIndex: 'product_code', width: 90 },
-              { title: 'Assignee', dataIndex: 'assigned_to', width: 110 },
-              { title: 'Priority', dataIndex: 'priority', width: 90,
+              { title: Titled('Case', 'case_ref_id'), dataIndex: 'case_ref_id', width: 60 },
+              { title: Titled('Applicant', 'applicant_name'), dataIndex: 'applicant_name' },
+              { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 90 },
+              { title: Titled('Assignee', 'assigned_to'), dataIndex: 'assigned_to', width: 110 },
+              { title: Titled('Priority', 'priority'), dataIndex: 'priority', width: 90,
                 render: (p: string) => <Tag style={{ color: PRIORITY_COLOR[p] || '#94a3b8' }}>{p}</Tag> },
-              { title: 'Due', dataIndex: 'sla_due_at', width: 170,
+              { title: Titled('Due', 'sla_due_at'), dataIndex: 'sla_due_at', width: 170,
                 render: (d: string) => <span style={{ color:'#ef4444' }}>{d ? new Date(d).toLocaleString() : '—'}</span> },
             ]}
           />

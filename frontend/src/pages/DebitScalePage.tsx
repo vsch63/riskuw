@@ -28,6 +28,7 @@ import {
   CalculatorOutlined, DollarOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -635,30 +636,30 @@ function ScaleLibraryTab({ onEdit }: { onEdit: (scale: Scale) => void }) {
 
   const cols = [
     {
-      title: 'Scale ID', dataIndex: 'scaleId', width: 160,
+      title: Titled('Scale ID','scaleId'), dataIndex: 'scaleId', width: 160,
       render: (v: string) => <span style={{ ...mono, color: '#00d4aa', fontWeight: 600 }}>{v}</span>,
     },
-    { title: 'Description', dataIndex: 'description' },
+    { title: Titled('Description','description'), dataIndex: 'description' },
     {
-      title: 'Type', dataIndex: 'scaleType', width: 130,
+      title: Titled('Type','scaleType'), dataIndex: 'scaleType', width: 130,
       render: (v: ScaleType) => v === 'DEBIT_SCALE'
         ? <Tag icon={<CalculatorOutlined/>} color="blue" style={{ fontSize: 11 }}>Debit Scale</Tag>
         : <Tag icon={<DollarOutlined/>} color="green" style={{ fontSize: 11 }}>Premium Rate</Tag>,
     },
-    { title: 'Category', dataIndex: 'category', width: 140 },
+    { title: Titled('Category','category'), dataIndex: 'category', width: 140 },
     {
-      title: 'Tranches', dataIndex: 'tranches', width: 90,
+      title: Titled('Tranches','tranches'), dataIndex: 'tranches', width: 90,
       render: (v: Tranche[]) => <Tag style={{ ...mono }}>{v?.length ?? 0}</Tag>,
     },
     {
-      title: 'Status', dataIndex: 'status', width: 110,
+      title: Titled('Status','status'), dataIndex: 'status', width: 110,
       render: (v: string) => (
         <Tag style={{ background: STATUS_COLOR[v] || '#64748b', color: '#fff', border: 'none', fontSize: 11 }}>
           {v}
         </Tag>
       ),
     },
-    { title: 'Ver', dataIndex: 'version', width: 60, render: (v: string) => <span style={{ ...mono, fontSize: 11 }}>{v}</span> },
+    { title: Titled('Ver','version'), dataIndex: 'version', width: 60, render: (v: string) => <span style={{ ...mono, fontSize: 11 }}>{v}</span> },
     {
       title: 'Actions', width: 170,
       render: (_: any, s: Scale) => (

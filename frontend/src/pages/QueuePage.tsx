@@ -11,6 +11,7 @@ import {
 import { uwAPI } from '../api/client'
 import { useCurrency } from '../context/CurrencyContext'
 import type { QueueCase } from '../types'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 const { TextArea } = Input
@@ -150,7 +151,7 @@ export default function QueuePage() {
 
   const columns = [
     {
-      title: 'Ref',
+      title: Titled('Ref', 'applicant_ref'),
       dataIndex: 'applicant_ref',
       width: 140,
       render: (v: string) => (
@@ -160,7 +161,7 @@ export default function QueuePage() {
       ),
     },
     {
-      title: 'Product',
+      title: Titled('Product', 'product_code'),
       dataIndex: 'product_code',
       width: 140,
       render: (v: string) => (
@@ -168,7 +169,7 @@ export default function QueuePage() {
       ),
     },
     {
-      title: 'Face Amount',
+      title: Titled('Face Amount', 'face_amount'),
       dataIndex: 'face_amount',
       width: 140,
       render: (v: number) => (
@@ -178,7 +179,7 @@ export default function QueuePage() {
       ),
     },
     {
-      title: 'Outcome',
+      title: Titled('Outcome', 'outcome'),
       dataIndex: 'outcome',
       width: 160,
       render: (v: string) => (
@@ -189,7 +190,7 @@ export default function QueuePage() {
       ),
     },
     {
-      title: 'Risk Class',
+      title: Titled('Risk Class', 'risk_class'),
       dataIndex: 'risk_class',
       width: 120,
       render: (v: string) => (
@@ -197,7 +198,7 @@ export default function QueuePage() {
       ),
     },
     {
-      title: 'Debits',
+      title: Titled('Debits', 'net_debit_points'),
       dataIndex: 'net_debit_points',
       width: 80,
       render: (v: number) => (
@@ -208,7 +209,7 @@ export default function QueuePage() {
       ),
     },
     {
-      title: 'Status',
+      title: Titled('Status', 'status'),
       dataIndex: 'status',
       width: 120,
       render: (v: string) => (

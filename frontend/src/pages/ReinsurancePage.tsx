@@ -8,6 +8,7 @@ import {
   SaveOutlined, DownloadOutlined, SendOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { Titled, CellHint } from '../components/ColHint'
 
 // Direct fetch helper for /reinsurance/* routes
 const _tok = () => localStorage.getItem('riskuw_token') || ''
@@ -645,7 +646,7 @@ function ReinsurerRegistryTab({ reinsurers, onRefresh }: { reinsurers: Reinsurer
       }
     },
     {
-      title: 'Reinsurer', dataIndex: 'name',
+      title: Titled('Reinsurer', 'name'), dataIndex: 'name',
       render: (v:string, ri:Reinsurer) => (
         <div>
           <div style={{ fontWeight:600, color:'#e2e8f0', fontSize:13 }}>{v}</div>
@@ -663,15 +664,15 @@ function ReinsurerRegistryTab({ reinsurers, onRefresh }: { reinsurers: Reinsurer
       )
     },
     {
-      title: 'Retention Limit', dataIndex: 'retention_limit', width: 160,
+      title: Titled('Retention Limit', 'retention_limit'), dataIndex: 'retention_limit', width: 160,
       render: (v:number) => v ? <span style={{ fontFamily:'var(--font-mono,monospace)', fontSize:12, color:'#9ca3af' }}>{fmt(v)}</span> : <span style={{ color:'#4b5563' }}>—</span>
     },
     {
-      title: 'Currency', dataIndex: 'currency', width: 90,
+      title: Titled('Currency', 'currency'), dataIndex: 'currency', width: 90,
       render: (v:string) => <Tag style={{ fontSize:11 }}>{v||'INR'}</Tag>
     },
     {
-      title: 'Contact', dataIndex: 'email', width: 200,
+      title: Titled('Contact', 'email'), dataIndex: 'email', width: 200,
       render: (v:string) => v ? <span style={{ fontSize:12, color:'#6b7280' }}>{v}</span> : <span style={{ color:'#4b5563' }}>—</span>
     },
     {
@@ -817,17 +818,17 @@ function CessionHistoryTab() {
   }
 
   const cols = [
-    { title:'Cession ref', dataIndex:'cession_ref', width:160, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontSize:12 }}>{v||'—'}</span> },
-    { title:'Applicant Ref', dataIndex:'case_number', width:160 },
-    { title:'Reinsurer', dataIndex:'reinsurer_name' },
-    { title:'Type', dataIndex:'cession_type', width:110 },
-    { title:'Status', dataIndex:'status', width:160, render:(v:string) => <Tag style={{ background:RI_STATUS_COLOR[v]||'#6b7280', color:'#fff', border:'none', fontSize:11 }}>{v}</Tag> },
-    { title:'RI Decision', dataIndex:'ri_decision', width:120, render:(v:string) => v ? <Tag color={v==='ACCEPTED'?'success':v==='DECLINED'?'error':'warning'}>{v}</Tag> : <span style={{ color:'#6b7280' }}>—</span> },
-    { title:'Gross face', dataIndex:'gross_face_amount', width:130, render:(v:number) => v ? fmt(v) : '—' },
-    { title:'Ceded', dataIndex:'ceded_amount', width:120, render:(v:number) => v ? fmt(v) : '—' },
-    { title:'RI prem', dataIndex:'ri_premium', width:110, render:(v:number) => v ? fmt(v) : '—' },
-    { title:'Submitted', dataIndex:'submitted_at', width:130, render:(v:string) => v?.slice(0,16)||'—' },
-    { title:'Decision date', dataIndex:'ri_decision_date', width:120, render:(v:string) => v?.slice(0,10)||'—' },
+    { title: Titled('Cession ref', 'cession_ref'), dataIndex:'cession_ref', width:160, render:(v:string) => <span style={{ fontFamily:'var(--font-mono,monospace)', color:'#00d4aa', fontSize:12 }}>{v||'—'}</span> },
+    { title: Titled('Applicant Ref', 'case_number'), dataIndex:'case_number', width:160 },
+    { title: Titled('Reinsurer', 'reinsurer_name'), dataIndex:'reinsurer_name' },
+    { title: Titled('Type', 'cession_type'), dataIndex:'cession_type', width:110, render: CellHint('cession_type') },
+    { title: Titled('Status', 'status'), dataIndex:'status', width:160, render:(v:string) => <Tag style={{ background:RI_STATUS_COLOR[v]||'#6b7280', color:'#fff', border:'none', fontSize:11 }}>{v}</Tag> },
+    { title: Titled('RI Decision', 'ri_decision'), dataIndex:'ri_decision', width:120, render:(v:string) => v ? <Tag color={v==='ACCEPTED'?'success':v==='DECLINED'?'error':'warning'}>{v}</Tag> : <span style={{ color:'#6b7280' }}>—</span> },
+    { title: Titled('Gross face', 'gross_face_amount'), dataIndex:'gross_face_amount', width:130, render:(v:number) => v ? fmt(v) : '—' },
+    { title: Titled('Ceded', 'ceded_amount'), dataIndex:'ceded_amount', width:120, render:(v:number) => v ? fmt(v) : '—' },
+    { title: Titled('RI prem', 'ri_premium'), dataIndex:'ri_premium', width:110, render:(v:number) => v ? fmt(v) : '—' },
+    { title: Titled('Submitted', 'submitted_at'), dataIndex:'submitted_at', width:130, render:(v:string) => v?.slice(0,16)||'—' },
+    { title: Titled('Decision date', 'ri_decision_date'), dataIndex:'ri_decision_date', width:120, render:(v:string) => v?.slice(0,10)||'—' },
   ]
 
   return (

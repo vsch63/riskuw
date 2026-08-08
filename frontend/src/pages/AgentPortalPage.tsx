@@ -4,6 +4,7 @@ import { Tabs, Button, Input, Select, InputNumber, Table, Tag, message, Spin, Fo
 import { SendOutlined, FileTextOutlined, DashboardOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
 import { useAuthStore } from '../context/authStore'
+import { Titled } from '../components/ColHint'
 
 const { Option } = Select
 
@@ -67,12 +68,12 @@ function DashboardTab() {
         ) : (
           <Table dataSource={recent} rowKey="applicant_ref" size="small" pagination={false}
             columns={[
-              { title: 'Ref', dataIndex: 'applicant_ref', width: 130, render: (v: string) => <code style={{ fontSize: 11, color: '#00d4aa' }}>{v}</code> },
-              { title: 'Product', dataIndex: 'product_code', width: 130 },
+              { title: Titled('Ref', 'applicant_ref'), dataIndex: 'applicant_ref', width: 130, render: (v: string) => <code style={{ fontSize: 11, color: '#00d4aa' }}>{v}</code> },
+              { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 130 },
               { title: 'Age/Gender', width: 100, render: (_: any, r: any) => `${r.age} / ${r.gender?.charAt(0)}` },
-              { title: 'Sum Assured', dataIndex: 'face_amount', width: 130, render: (v: number) => `₹${Number(v).toLocaleString('en-IN')}` },
-              { title: 'Status', dataIndex: 'status', width: 130, render: (v: string) => <Tag color={STATUS_COLOR[v] || 'default'} style={{ fontSize: 11 }}>{STATUS_LABEL[v] || v}</Tag> },
-              { title: 'Submitted', dataIndex: 'created_at', width: 150, render: (v: string) => v?.slice(0, 16).replace('T', ' ') },
+              { title: Titled('Sum Assured', 'face_amount'), dataIndex: 'face_amount', width: 130, render: (v: number) => `₹${Number(v).toLocaleString('en-IN')}` },
+              { title: Titled('Status', 'status'), dataIndex: 'status', width: 130, render: (v: string) => <Tag color={STATUS_COLOR[v] || 'default'} style={{ fontSize: 11 }}>{STATUS_LABEL[v] || v}</Tag> },
+              { title: Titled('Submitted', 'created_at'), dataIndex: 'created_at', width: 150, render: (v: string) => v?.slice(0, 16).replace('T', ' ') },
             ]}
           />
         )}
@@ -330,15 +331,15 @@ function MyCasesTab() {
       <Table dataSource={submissions} rowKey="application_number" loading={loading} size="small"
         pagination={{ current: page, pageSize: 20, total, onChange: p => setPage(p), showSizeChanger: false }}
         columns={[
-          { title: 'Reference', dataIndex: 'applicant_ref', width: 150, render: (v: string) => <code style={{ fontSize: 11, color: '#00d4aa' }}>{v}</code> },
-          { title: 'Product', dataIndex: 'product_code', width: 130 },
+          { title: Titled('Reference', 'applicant_ref'), dataIndex: 'applicant_ref', width: 150, render: (v: string) => <code style={{ fontSize: 11, color: '#00d4aa' }}>{v}</code> },
+          { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 130 },
           { title: 'Applicant', width: 150, render: (_: any, r: any) => r.applicant_name || `${r.age}y ${r.gender?.charAt(0)}` },
-          { title: 'Sum Assured', dataIndex: 'face_amount', width: 140, render: (v: number) => `₹${Number(v).toLocaleString('en-IN')}` },
-          { title: 'Premium p.a.', dataIndex: 'approved_premium', width: 130, render: (v: number) => v ? `₹${Number(v).toLocaleString('en-IN')}` : '—' },
-          { title: 'Status', dataIndex: 'status', width: 130, render: (v: string) => <Tag color={STATUS_COLOR[v] || 'default'} style={{ fontSize: 11 }}>{STATUS_LABEL[v] || v}</Tag> },
-          { title: 'Risk Class', dataIndex: 'risk_class', width: 110, render: (v: string) => v || '—' },
-          { title: 'Case No.', dataIndex: 'case_number', width: 160, render: (v: string) => v ? <code style={{ fontSize: 10, color: '#6b7280' }}>{v}</code> : '—' },
-          { title: 'Submitted', dataIndex: 'created_at', width: 140, render: (v: string) => v?.slice(0, 16).replace('T', ' ') },
+          { title: Titled('Sum Assured', 'face_amount'), dataIndex: 'face_amount', width: 140, render: (v: number) => `₹${Number(v).toLocaleString('en-IN')}` },
+          { title: Titled('Premium p.a.', 'approved_premium'), dataIndex: 'approved_premium', width: 130, render: (v: number) => v ? `₹${Number(v).toLocaleString('en-IN')}` : '—' },
+          { title: Titled('Status', 'status'), dataIndex: 'status', width: 130, render: (v: string) => <Tag color={STATUS_COLOR[v] || 'default'} style={{ fontSize: 11 }}>{STATUS_LABEL[v] || v}</Tag> },
+          { title: Titled('Risk Class', 'risk_class'), dataIndex: 'risk_class', width: 110, render: (v: string) => v || '—' },
+          { title: Titled('Case No.', 'case_number'), dataIndex: 'case_number', width: 160, render: (v: string) => v ? <code style={{ fontSize: 10, color: '#6b7280' }}>{v}</code> : '—' },
+          { title: Titled('Submitted', 'created_at'), dataIndex: 'created_at', width: 140, render: (v: string) => v?.slice(0, 16).replace('T', ' ') },
         ]}
       />
     </div>
