@@ -724,6 +724,8 @@ def run_evaluation(payload: dict, actor: str, tenant_id: str | None) -> dict:
         "is_stp":            is_stp,
         "pathway":           pathway,
         "adverse_action_text": adverse,
+        "product_code":      product_code,
+        "face_amount":       face_amount,
         "application_id":    applicant_ref,
         "evaluated_at":      now,
         "rules_version":     "engine-2.0",

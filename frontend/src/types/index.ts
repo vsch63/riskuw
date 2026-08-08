@@ -92,6 +92,14 @@ export interface LabValues {
 
 export interface EvaluatePayload {
   applicant_ref: string;
+  first_name?: string;
+  middle_name?: string;
+  last_name?: string;
+  email?: string;
+  mobile?: string;
+  address_line1?: string;
+  city?: string;
+  pincode?: string;
   age: number;
   gender: 'MALE' | 'FEMALE';
   state: string;
@@ -99,6 +107,7 @@ export interface EvaluatePayload {
   product_code: string;
   face_amount: number;
   coverage_term_yrs: number;
+  premium_mode?: string; // ANNUAL | HALF_YEARLY | QUARTERLY | MONTHLY
   policy_effective_date?: string;
   policy_expire_date?: string;
   tobacco_status: string;
@@ -116,6 +125,8 @@ export interface EvaluatePayload {
   depression_hospitalized?: boolean;
   epilepsy?: boolean;
   copd?: boolean;
+  icd10_codes?: string[];
+  extra_debit_points?: number;
   occupation_class?: string;
   occupation_title?: string;
   alcohol_drinks_week?: number;
@@ -161,6 +172,9 @@ export interface UWDecision {
   rules_version?: string;
   evaluated_at?: string;
   applicant_name?: string;
+  case_number?: string;
+  product_code?: string;
+  face_amount?: number;
   policy_effective_date?: string;
   policy_expire_date?: string;
   error_codes?: string[];

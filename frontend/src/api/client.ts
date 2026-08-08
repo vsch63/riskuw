@@ -45,6 +45,15 @@ export const authAPI = {
   disableMFA: (username: string, session_token: string) =>
     api.post('/auth/mfa/disable', { username, session_token }),
 
+  forgotPassword: (identifier: string) =>
+    api.post('/auth/forgot-password', { identifier }),
+
+  verifyResetMFA: (token: string, totp_code: string) =>
+    api.post('/auth/verify-reset-mfa', { token, totp_code }),
+
+  resetPasswordConfirm: (token: string, new_password: string) =>
+    api.post('/auth/reset-password-confirm', { token, new_password }),
+
   getUsers: () => api.get('/auth/users'),
 }
 

@@ -307,7 +307,7 @@ function FormulaModal({ formula, refTables, onClose, onSaved }: any) {
                         const t = refTables.find((x: any) => x.id === v)
                         if (t?.key_field) stepForm.setFieldsValue({ user_label: t.key_field })
                       }}>
-                      {refTables.map(t => (
+                      {refTables.map((t: any) => (
                         <Option key={t.id} value={t.id} label={`${t.table_code} · ${t.table_name}`}>
                           <span>{t.table_code}</span> <span style={{ color: '#8b949e', fontSize: 11 }}>· {t.table_name}</span>
                         </Option>

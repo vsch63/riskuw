@@ -962,7 +962,7 @@ function SMTPTab() {
   const [testEmail, setTest]    = useState('')
   const [testing, setTesting]   = useState(false)
   const [connTesting, setConn]  = useState(false)
-  const [smtpStatus, setStatus] = useState<{host?:string; port?:string; from_email?:string} | null>(null)
+  const [smtpStatus, setStatus] = useState<{smtp_host?:string; smtp_port?:string; smtp_user?:string; smtp_password?:string; smtp_from?:string; smtp_from_name?:string; smtp_use_tls?:boolean} | null>(null)
 
   useEffect(() => {
     sysApi.get('/system/smtp').then(r => {
@@ -1945,7 +1945,7 @@ function UWScalesTab() {
 // TAB 11 — User Labels
 // ══════════════════════════════════════════════════════════════════════════════
 interface UserLabel {
-  i: string
+  id?: string
   label_key:      string
   label_name:     string
   data_type:      string
@@ -2347,7 +2347,7 @@ function UserLabelsTab() {
       render: (_: any, r: UserLabel) => (
         <div style={{ fontSize: 11, color: '#6b7280' }}>
           <div>From: {r.effective_date}</div>
-          <div>To: {r.expiry_te || 'open'}</div>
+          <div>To: {r.expiry_date || 'open'}</div>
         </div>
       ),
     },

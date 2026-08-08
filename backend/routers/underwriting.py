@@ -364,6 +364,12 @@ def evaluate(body: EvaluateRequest, current: FlexibleAuth):
     if case_number:
         result["case_number"] = case_number
 
+    # Echo request context so the letter/PDF generators can render it. The
+    # engine already returns product_code/face_amount on the normal path; this
+    # also covers hard-decline and fallback returns.
+    result["product_code"] = body.product_code
+    result["face_amount"]  = body.face_amount
+
     _persist_to_queue(body, result, current)
 
     # ── Send decision email if applicant email is available ───────────────────

@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     db_pool_max: int = 10
 
     # ── JWT ───────────────────────────────────────────────────────
-    jwt_secret: str = "CHANGE_ME_USE_SECRETS_TOKEN_HEX_32"
+    # No default: deps.py refuses to boot with an empty/placeholder
+    # JWT_SECRET, so a mis-configured deploy fails loudly.
+    jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480
 

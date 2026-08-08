@@ -246,7 +246,7 @@ export default function LoginPage() {
   const handleForgot = async (values: { identifier: string }) => {
     setLoading(true); setError('')
     try {
-      await authAPI.post('/auth/forgot-password', { identifier: values.identifier })
+      await authAPI.forgotPassword(values.identifier)
       setForgotSent(true)
     } catch {
       // Always show success to avoid user enumeration
@@ -260,7 +260,7 @@ export default function LoginPage() {
   const handleResetMFA = async (code: string) => {
     setOtpLoading(true); setError('')
     try {
-      await authAPI.post('/auth/verify-reset-mfa', { token: resetToken, totp_code: code })
+      await authAPI.verifyResetMFA(resetToken, code)
       setStep('reset_password')
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } } }
@@ -277,10 +277,7 @@ export default function LoginPage() {
     }
     setLoading(true); setError('')
     try {
-      await authAPI.post('/auth/reset-password-confirm', {
-        token: resetToken,
-        new_password: values.new_password,
-      })
+      await authAPI.resetPasswordConfirm(resetToken, values.new_password)
       setStep('reset_done')
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } } }

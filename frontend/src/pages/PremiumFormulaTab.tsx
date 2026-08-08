@@ -220,7 +220,7 @@ function StepRow({
             }))}
           />
         )}
-        {!['USER_VALUE', 'USER_LABEL', 'RATE_SCALE'].includes(step.parameter_type) && (
+        {!['USER_VALUE', 'USER_LABEL', 'RATE_SCALE'].includes(step.parameter_type ?? '') && (
           <Input
             value={step.description || ''}
             onChange={e => onChange(index, { ...step, description: e.target.value })}
