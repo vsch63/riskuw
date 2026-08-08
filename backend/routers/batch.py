@@ -2,7 +2,7 @@
 # Replace the existing download_template endpoint with this version
 # It accepts an optional product_code query param and adds USER_LABEL columns
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from deps import CurrentUser
 
 router = APIRouter()        # define first
@@ -1037,12 +1037,14 @@ def list_schedules(current: CurrentUser):
     try:
         cur = conn.cursor()
         try:
-            cur.execute("SELECT * FROM batch_recurring_schedules ORDER BY submitted_at DESC")
+            cur.execute("SELECT * FROM batch_recurring_schedules ORDER BY created_at DESC")
             rows = cur.fetchall()
             result = []
             for r in rows:
                 row = dict(r)
-                for f in ("created_at","updated_at","last_run_at","next_run_at"):
+                # Table column is status ('ACTIVE'/'INACTIVE'); frontend contract uses is_active.
+                row["is_active"] = row.get("status") == "ACTIVE"
+                for f in ("created_at", "last_run_at", "next_run_at"):
                     if row.get(f): row[f] = str(row[f])
                 result.append(row)
             cur.close()
@@ -1061,14 +1063,14 @@ def create_schedule(body: dict, current: CurrentUser):
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO batch_recurring_schedules
-                (schedule_name, cron_expression, is_active, created_by)
-            VALUES (%s, %s, %s, %s) RETURNING id
+                (schedule_name, cron_expression, status)
+            VALUES (%s, %s, %s) RETURNING id
         """, (
             body.get("schedule_name"), body.get("cron_expression"),
-            body.get("is_active", True), current.username,
+            "ACTIVE" if body.get("is_active", True) else "INACTIVE",
         ))
+        sid = cur.fetchone()["id"]
         conn.commit()
-        sid = cur.fetchone()[0]
         cur.close()
         return {"id": sid, "message": "Schedule created"}
     except Exception as e:
@@ -1085,9 +1087,9 @@ def update_schedule(sid: int, body: dict, current: CurrentUser):
         cur = conn.cursor()
         cur.execute("""
             UPDATE batch_recurring_schedules
-            SET is_active=%s, updated_at=now()
+            SET status=%s
             WHERE id=%s
-        """, (body.get("is_active"), sid))
+        """, ("ACTIVE" if body.get("is_active") else "INACTIVE", sid))
         conn.commit()
         cur.close()
         return {"message": "Schedule updated"}

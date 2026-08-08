@@ -75,14 +75,16 @@ def create_manual_cession(
         cur.execute(
             """
             INSERT INTO ri_cession
-                (case_id, reinsurer_id, cession_type, face_amount,
-                 cession_amount, risk_class, treaty_reference, status, created_at)
-            VALUES (%s, %s, 'MANUAL', %s, %s, %s, %s, 'PENDING', now())
+                (case_id, reinsurer_id, cession_type,
+                 gross_face_amount, ceded_amount,
+                 ri_reference, status, notes, created_at)
+            VALUES (%s, %s, 'MANUAL', %s, %s, %s, 'PENDING', %s, now())
             ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (case_id, reinsurer_id, face_amount, cession_amount,
-             risk_class, treaty_reference),
+             treaty_reference,
+             f"risk_class: {risk_class}" if risk_class else None),
         )
         row = cur.fetchone()
         if not row:
@@ -102,8 +104,8 @@ def create_manual_cession(
                 actor, new_id,
                 json.dumps({
                     "case_id": case_id,
-                    "face_amount": face_amount,
-                    "cession_amount": cession_amount,
+                    "gross_face_amount": face_amount,
+                    "ceded_amount": cession_amount,
                     "reinsurer_id": reinsurer_id,
                 }),
             ),

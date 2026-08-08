@@ -15,6 +15,7 @@ POST /products/{code}/rules/assign — assign rule to product
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -153,15 +154,28 @@ def create_custom_field(body: CustomFieldIn, user: CurrentUser = CurrentUser):
 
 # ── Custom rules ──────────────────────────────────────────────────────────────
 
+# Mirrors the real custom_uw_rule table (V001) — logic/conditions/action are
+# NOT NULL, and the frontend payload sends exactly these keys. debit_points /
+# hard_stop / requires_aps have no columns of their own; when `action` is not
+# supplied they are folded into the action jsonb.
 class CustomRuleIn(BaseModel):
+    rule_id: str
     rule_name: str
     category: str = "CUSTOM"
     description: Optional[str] = None
-    condition_json: Optional[dict] = None
+    product_code: Optional[str] = None
+    condition_logic: str = "AND"
+    priority: int = 1
     debit_points: int = 0
-    is_hard_stop: bool = False
-    aps_required: bool = False
-    product_codes: list[str] = []
+    hard_stop: bool = False
+    requires_aps: bool = False
+    effective_date: Optional[str] = None
+    expire_date: Optional[str] = None
+    conditions: dict | list | None = None
+    action: Optional[dict] = None
+    version: str = "1.0"
+    status: str = "DRAFT"
+    rule_code: Optional[str] = None  # legacy alias; superseded by rule_id
 
 
 class WorkflowIn(BaseModel):
@@ -179,7 +193,30 @@ def list_custom_rules(user: CurrentUser = CurrentUser):
         )
         rows = cur.fetchall()
         cur.close()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            row = dict(r)
+            # Map real table columns to the frontend contract
+            # (rule_name / rule_code / expire_date / condition_logic /
+            #  debit_points / hard_stop / requires_aps).
+            row["rule_name"] = row.pop("name", None) or row["rule_id"]
+            row["rule_code"] = row["rule_id"]
+            row["condition_logic"] = row.get("logic")
+            if row.get("effective_date"):
+                row["effective_date"] = str(row["effective_date"])[:10]
+            row["expire_date"] = str(row["expiry_date"])[:10] if row.get("expiry_date") else None
+            action = row.get("action") or {}
+            if isinstance(action, str):
+                try:
+                    action = json.loads(action)
+                except Exception:
+                    action = {}
+            row["debit_points"] = action.get("debit_points", 0)
+            row["hard_stop"] = action.get("hard_stop", False)
+            row["requires_aps"] = action.get("requires_aps", False)
+            row["version"] = row.get("rule_version")
+            result.append(row)
+        return result
     except Exception:
         return []
     finally:
@@ -192,23 +229,36 @@ def create_custom_rule(body: CustomRuleIn, user: CurrentUser = CurrentUser):
         raise HTTPException(status_code=403, detail="Admins only")
     conn, release = _get_db()
     try:
-        import json
         conn.autocommit = False
         cur = conn.cursor()
+        action = body.action if body.action is not None else {
+            "debit_points": body.debit_points,
+            "hard_stop": body.hard_stop,
+            "requires_aps": body.requires_aps,
+        }
         cur.execute(
             """
             INSERT INTO custom_uw_rule
-                (rule_name, category, description, condition_json,
-                 debit_points, is_hard_stop, aps_required,
-                 status, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s)
+                (tenant_id, product_code, rule_id, name, description, category,
+                 logic, is_enabled, priority, conditions, action,
+                 effective_date, expiry_date, status, rule_version,
+                 created_by, updated_by, version)
+            VALUES (%s, %s, %s, %s, %s, %s,
+                    %s, true, %s, %s::jsonb, %s::jsonb,
+                    %s, %s, %s, %s,
+                    %s, %s, 1)
             RETURNING id
             """,
             (
-                body.rule_name, body.category, body.description,
-                json.dumps(body.condition_json) if body.condition_json else None,
-                body.debit_points, body.is_hard_stop, body.aps_required,
-                user.username,
+                user.tenant_id or "00000000-0000-0000-0000-000000000001",
+                body.product_code, body.rule_id, body.rule_name,
+                body.description, body.category,
+                body.condition_logic or "AND", body.priority,
+                json.dumps(body.conditions) if body.conditions is not None else "{}",
+                json.dumps(action),
+                body.effective_date or None, body.expire_date or None,
+                body.status, body.version,
+                user.username, user.username,
             ),
         )
         rule_id = cur.fetchone()["id"]

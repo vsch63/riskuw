@@ -449,7 +449,7 @@ def get_thresholds(code: str, current: CurrentUser):
             cur.execute("""
                 SELECT stp_threshold, refer_threshold, decline_threshold,
                        max_table_rating, max_flat_extra,
-                       effective_date, expire_date, change_reason
+                       effective_date, expiry_date
                 FROM product_decision_thresholds
                 WHERE product_code = %s
                 ORDER BY created_at DESC LIMIT 1
@@ -457,6 +457,8 @@ def get_thresholds(code: str, current: CurrentUser):
             row = cur.fetchone()
             if row:
                 cur.close()
+                # Table column is expiry_date; frontend contract uses expire_date.
+                # change_reason has no column in this table — kept as None for API compat.
                 return {
                     "stp_threshold":    row["stp_threshold"],
                     "refer_threshold":  row["refer_threshold"],
@@ -464,8 +466,8 @@ def get_thresholds(code: str, current: CurrentUser):
                     "max_table_rating": row["max_table_rating"],
                     "max_flat_extra":   float(row["max_flat_extra"]) if row["max_flat_extra"] else 10.0,
                     "effective_date":   str(row["effective_date"])[:10] if row["effective_date"] else None,
-                    "expire_date":      str(row["expire_date"])[:10]    if row["expire_date"]    else None,
-                    "change_reason":    row["change_reason"],
+                    "expire_date":      str(row["expiry_date"])[:10]    if row["expiry_date"]    else None,
+                    "change_reason":    None,
                 }
         except Exception:
             pass  # table may not exist yet, fall through
@@ -501,26 +503,43 @@ def save_thresholds(code: str, body: ThresholdUpdate, current: CurrentUser):
         cur = conn.cursor()
         # Try dedicated thresholds table first
         try:
+            # Table is per-(tenant, product) with several NOT NULL risk-flag
+            # columns that have no UI. Mirrors scripts/db/seed_demo_data.py.
+            # change_reason has no column here; expiry_date is the column name
+            # (frontend/API contract keeps calling it expire_date).
             cur.execute("""
                 INSERT INTO product_decision_thresholds
-                    (product_code, stp_threshold, refer_threshold, decline_threshold,
-                     max_table_rating, max_flat_extra, change_reason,
-                     effective_date, expire_date, created_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::date,%s::date,now())
-                ON CONFLICT (product_code) DO UPDATE SET
+                    (id, tenant_id, product_code,
+                     stp_threshold, refer_threshold, decline_threshold,
+                     max_table_rating, max_flat_extra,
+                     allow_permanent_flat_extra, allow_exclusion_riders,
+                     max_income_multiple, max_net_worth_multiple, large_face_threshold,
+                     version, created_by, created_at, effective_date, expiry_date)
+                VALUES
+                    (gen_random_uuid(), %s::uuid, %s,
+                     %s, %s, %s,
+                     %s, %s,
+                     false, true,
+                     20, 5.0, 10000000,
+                     1, %s, now(), %s, %s)
+                ON CONFLICT (tenant_id, product_code) DO UPDATE SET
                     stp_threshold     = EXCLUDED.stp_threshold,
                     refer_threshold   = EXCLUDED.refer_threshold,
                     decline_threshold = EXCLUDED.decline_threshold,
                     max_table_rating  = EXCLUDED.max_table_rating,
                     max_flat_extra    = EXCLUDED.max_flat_extra,
-                    change_reason     = EXCLUDED.change_reason,
                     effective_date    = EXCLUDED.effective_date,
-                    expire_date       = EXCLUDED.expire_date,
-                    created_at        = now()
+                    expiry_date       = EXCLUDED.expiry_date,
+                    version           = product_decision_thresholds.version + 1,
+                    updated_by        = %s,
+                    updated_at        = now()
             """, (
-                code.upper(), body.stp_threshold, body.refer_threshold, body.decline_threshold,
-                body.max_table_rating, body.max_flat_extra, body.change_reason,
+                current.tenant_id or "00000000-0000-0000-0000-000000000001", code.upper(),
+                body.stp_threshold, body.refer_threshold, body.decline_threshold,
+                body.max_table_rating, body.max_flat_extra,
+                current.username,
                 body.effective_date or None, body.expire_date or None,
+                current.username,
             ))
         except Exception:
             pass  # table may not exist, fall through to products update
