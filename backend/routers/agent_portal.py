@@ -26,7 +26,7 @@ def _get_db():
     return conn, release_conn
 
 
-def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "AGENT", uploaded_by: str = None):
+def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "AGENT", uploaded_by: str = None, tenant_id: str = None):
     """Upsert demographic/contact data into applicant_master. Never overwrites with blanks."""
     if not applicant_ref:
         return
@@ -39,7 +39,7 @@ def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = 
     occupation = body.get("occupation_title") or body.get("occupation")
     income     = body.get("annual_income")
 
-    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (applicant_ref,))
+    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s", (applicant_ref, tenant_id))
     existing = cur.fetchone()
 
     if existing:
@@ -56,19 +56,19 @@ def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = 
                 params.append(val)
         if sets:
             sets.append("updated_at=now()")
-            params.append(applicant_ref)
+            params.extend([applicant_ref, tenant_id])
             cur.execute(
-                f"UPDATE applicant_master SET {', '.join(sets)} WHERE applicant_ref=%s",
+                f"UPDATE applicant_master SET {', '.join(sets)} WHERE applicant_ref=%s AND tenant_id=%s",
                 params
             )
     else:
         cur.execute("""
             INSERT INTO applicant_master
-                (applicant_ref, full_name, email, phone, mobile, dob, gender,
+                (applicant_ref, tenant_id, full_name, email, phone, mobile, dob, gender,
                  state, occupation, annual_income, source, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (applicant_ref) DO NOTHING
-        """, (applicant_ref, full_name, email, phone, phone, dob, gender,
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (tenant_id, applicant_ref) DO NOTHING
+        """, (applicant_ref, tenant_id, full_name, email, phone, phone, dob, gender,
               state, occupation, income, source, uploaded_by))
 
 
@@ -90,8 +90,8 @@ def agent_dashboard(current: CurrentUser):
             FROM application a
             LEFT JOIN uw_case c ON c.application_id = a.id
             LEFT JOIN uw_decision d ON d.case_id = c.id AND d.is_final = true
-            WHERE a.submitted_by_agent = %s
-        """, (current.username,))
+            WHERE a.submitted_by_agent = %s AND a.tenant_id = %s
+        """, (current.username, current.tenant_id))
         stats = dict(cur.fetchone() or {})
 
         # Recent submissions
@@ -104,10 +104,10 @@ def agent_dashboard(current: CurrentUser):
             FROM application a
             LEFT JOIN uw_case c ON c.application_id = a.id
             LEFT JOIN uw_decision d ON d.case_id = c.id AND d.is_final = true
-            WHERE a.submitted_by_agent = %s
+            WHERE a.submitted_by_agent = %s AND a.tenant_id = %s
             ORDER BY a.created_at DESC
             LIMIT 5
-        """, (current.username,))
+        """, (current.username, current.tenant_id))
         recent = []
         for r in cur.fetchall():
             d = dict(r)
@@ -207,7 +207,7 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
         _conn, _release = _get_db()
         try:
             sar = run_sar(
-                _conn, '00000000-0000-0000-0000-000000000001', body.product_code,
+                _conn, current.tenant_id, body.product_code,
                 applicant={
                     "applicant_ref": body.applicant_ref,
                     "age":           body.age,
@@ -260,7 +260,7 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
         # Run UW engine
         try:
             from services.uw_engine import run_evaluation
-            result = run_evaluation(payload, current.username, '00000000-0000-0000-0000-000000000001')
+            result = run_evaluation(payload, current.username, current.tenant_id)
         except ImportError:
             raise HTTPException(500, "UW engine not available")
         except Exception as e:
@@ -283,7 +283,7 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
         conn4, release4 = _get_db()
         try:
             cur4 = conn4.cursor()
-            _upsert_applicant_master(cur4, body.applicant_ref, body.model_dump(), "AGENT", current.username)
+            _upsert_applicant_master(cur4, body.applicant_ref, body.model_dump(), "AGENT", current.username, current.tenant_id)
             conn4.commit()
             cur4.close()
         finally:
@@ -310,9 +310,10 @@ def agent_submit(body: AgentSubmission, current: CurrentUser):
                     agent_name = %s,
                     agent_id = %s,
                     applicant_name = %s
-                WHERE applicant_ref = %s
+                WHERE applicant_ref = %s AND tenant_id = %s
             """, (current.username, current.username,
-                  current.username, body.applicant_name, body.applicant_ref))
+                  current.username, body.applicant_name,
+                  body.applicant_ref, current.tenant_id))
             conn.commit()
             cur.close()
         finally:
@@ -356,7 +357,7 @@ def list_submissions(
         cur = conn.cursor()
         offset = (page - 1) * per_page
         status_filter = ""
-        params = [current.username]
+        params = [current.username, current.tenant_id]
         if status:
             status_filter = "AND COALESCE(d.outcome, c.status, 'PENDING') ILIKE %s"
             params.append(f"%{status}%")
@@ -373,7 +374,7 @@ def list_submissions(
             FROM application a
             LEFT JOIN uw_case c ON c.application_id = a.id
             LEFT JOIN uw_decision d ON d.case_id = c.id AND d.is_final = true
-            WHERE a.submitted_by_agent = %s {status_filter}
+            WHERE a.submitted_by_agent = %s AND a.tenant_id = %s {status_filter}
             ORDER BY a.created_at DESC
             LIMIT %s OFFSET %s
         """, params + [per_page, offset])
@@ -388,8 +389,9 @@ def list_submissions(
             rows.append(d)
 
         cur.execute("""
-            SELECT COUNT(*) FROM application WHERE submitted_by_agent = %s
-        """, (current.username,))
+            SELECT COUNT(*) FROM application
+            WHERE submitted_by_agent = %s AND tenant_id = %s
+        """, (current.username, current.tenant_id))
         total = cur.fetchone()["count"]
         cur.close()
 
@@ -416,8 +418,8 @@ def get_submission(ref: str, current: CurrentUser):
             FROM application a
             LEFT JOIN uw_case c ON c.application_id = a.id
             LEFT JOIN uw_decision d ON d.case_id = c.id AND d.is_final = true
-            WHERE a.applicant_ref = %s AND a.submitted_by_agent = %s
-        """, (ref, current.username))
+            WHERE a.applicant_ref = %s AND a.submitted_by_agent = %s AND a.tenant_id = %s
+        """, (ref, current.username, current.tenant_id))
         row = cur.fetchone()
         cur.close()
         if not row:

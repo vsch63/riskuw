@@ -380,8 +380,8 @@ def evaluate(body: EvaluateRequest, current: FlexibleAuth):
         _cur  = _conn.cursor()
         # Look up applicant email from member master
         _cur.execute(
-            "SELECT email, full_name AS name FROM applicant_master WHERE applicant_ref = %s LIMIT 1",
-            (body.applicant_ref,)
+            "SELECT email, full_name AS name FROM applicant_master WHERE applicant_ref = %s AND tenant_id = %s LIMIT 1",
+            (body.applicant_ref, current.tenant_id)
         )
         member = _cur.fetchone()
         _cur.close()
@@ -565,7 +565,7 @@ def _persist_decision(body: "EvaluateRequest", result: dict, current) -> str | N
 
 
 
-def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "ONLINE", uploaded_by: str = None):
+def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "ONLINE", uploaded_by: str = None, tenant_id: str = None):
     """
     Upsert demographic/contact data into applicant_master.
     Safe to call with partial data - only updates fields that are present and non-empty.
@@ -582,7 +582,7 @@ def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = 
     occupation = body.get("occupation_title") or body.get("occupation")
     income     = body.get("annual_income")
 
-    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (applicant_ref,))
+    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s", (applicant_ref, tenant_id))
     existing = cur.fetchone()
 
     if existing:
@@ -599,70 +599,19 @@ def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = 
                 params.append(val)
         if sets:
             sets.append("updated_at=now()")
-            params.append(applicant_ref)
+            params.extend([applicant_ref, tenant_id])
             cur.execute(
-                f"UPDATE applicant_master SET {chr(39).join([chr(44).join(sets)])} WHERE applicant_ref=%s".replace("'", ""),
+                f"UPDATE applicant_master SET {', '.join(sets)} WHERE applicant_ref=%s AND tenant_id=%s",
                 params
             )
     else:
         cur.execute("""
             INSERT INTO applicant_master
-                (applicant_ref, full_name, email, phone, mobile, dob, gender,
+                (applicant_ref, tenant_id, full_name, email, phone, mobile, dob, gender,
                  state, occupation, annual_income, source, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (applicant_ref) DO NOTHING
-        """, (applicant_ref, full_name, email, phone, phone, dob, gender,
-              state, occupation, income, source, uploaded_by))
-
-
-
-def _upsert_applicant_master(cur, applicant_ref: str, body: dict, source: str = "ONLINE", uploaded_by: str = None):
-    """
-    Upsert demographic/contact data into applicant_master.
-    Safe to call with partial data - only updates fields that are present and non-empty.
-    Never overwrites existing data with blanks.
-    """
-    if not applicant_ref:
-        return
-    full_name  = body.get("applicant_name") or body.get("full_name")
-    email      = body.get("applicant_email") or body.get("email")
-    phone      = body.get("applicant_phone") or body.get("phone") or body.get("mobile")
-    dob        = body.get("date_of_birth") or body.get("dob")
-    gender     = body.get("gender")
-    state      = body.get("state")
-    occupation = body.get("occupation_title") or body.get("occupation")
-    income     = body.get("annual_income")
-
-    cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (applicant_ref,))
-    existing = cur.fetchone()
-
-    if existing:
-        sets = []
-        params = []
-        field_map = {
-            "full_name": full_name, "email": email, "phone": phone,
-            "mobile": phone, "dob": dob, "gender": gender, "state": state,
-            "occupation": occupation, "annual_income": income,
-        }
-        for col, val in field_map.items():
-            if val not in (None, ""):
-                sets.append(f"{col}=%s")
-                params.append(val)
-        if sets:
-            sets.append("updated_at=now()")
-            params.append(applicant_ref)
-            cur.execute(
-                f"UPDATE applicant_master SET {chr(39).join([chr(44).join(sets)])} WHERE applicant_ref=%s".replace("'", ""),
-                params
-            )
-    else:
-        cur.execute("""
-            INSERT INTO applicant_master
-                (applicant_ref, full_name, email, phone, mobile, dob, gender,
-                 state, occupation, annual_income, source, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (applicant_ref) DO NOTHING
-        """, (applicant_ref, full_name, email, phone, phone, dob, gender,
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (tenant_id, applicant_ref) DO NOTHING
+        """, (applicant_ref, tenant_id, full_name, email, phone, phone, dob, gender,
               state, occupation, income, source, uploaded_by))
 
 def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
@@ -935,11 +884,11 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
             ucur = conn.cursor()
             ucur.execute("""
                 INSERT INTO applicant_master (
-                    applicant_ref, full_name, email, mobile, phone,
+                    applicant_ref, tenant_id, full_name, email, mobile, phone,
                     gender, address_line1, city, state, pincode,
                     annual_income, source
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ONLINE')
-                ON CONFLICT (applicant_ref) DO UPDATE SET
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ONLINE')
+                ON CONFLICT (tenant_id, applicant_ref) DO UPDATE SET
                     full_name    = COALESCE(EXCLUDED.full_name,    applicant_master.full_name),
                     email        = COALESCE(EXCLUDED.email,        applicant_master.email),
                     mobile       = COALESCE(EXCLUDED.mobile,       applicant_master.mobile),
@@ -952,7 +901,7 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                     annual_income= COALESCE(EXCLUDED.annual_income,applicant_master.annual_income),
                     updated_at   = now()
             """, (
-                body.applicant_ref,
+                body.applicant_ref, current.tenant_id,
                 full_name,
                 getattr(body,"email",None) or None,
                 getattr(body,"mobile",None) or None,
@@ -984,8 +933,8 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                 try:
                     ncur = nconn.cursor()
                     ncur.execute(
-                        "SELECT full_name, email FROM applicant_master WHERE applicant_ref=%s LIMIT 1",
-                        (body.applicant_ref,)
+                        "SELECT full_name, email FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s LIMIT 1",
+                        (body.applicant_ref, current.tenant_id)
                     )
                     arow = ncur.fetchone()
                     ncur.close()
@@ -1713,8 +1662,8 @@ def evaluate_proposal(body: ProposalRequest, current: FlexibleAuth):
             _c2 = _gc()
             _cur2 = _c2.cursor()
             _cur2.execute(
-                "SELECT email, full_name FROM applicant_master WHERE applicant_ref=%s LIMIT 1",
-                (body.applicant_ref,))
+                "SELECT email, full_name FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s LIMIT 1",
+                (body.applicant_ref, current.tenant_id))
             _row = _cur2.fetchone()
             _cur2.close()
             if _row:

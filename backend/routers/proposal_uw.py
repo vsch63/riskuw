@@ -9,9 +9,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from deps import CurrentUser
+
 logger = logging.getLogger("uw_platform")
 router = APIRouter()
-TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 class MedicalInfo(BaseModel):
     height_inches:       Optional[float] = None
@@ -114,15 +115,15 @@ def _build_payload(body: ProposalEvaluateRequest, benefit: BenefitLine) -> dict:
         "icd10_codes": m.icd10_codes, "extra_debit_points": m.extra_debit_points,
     }
 
-def _run_eval(conn, payload: dict) -> dict:
+def _run_eval(conn, payload: dict, tenant_id: str) -> dict:
     from routers.underwriting import EvaluateRequest, _fallback_evaluate
     class _FakeUser:
-        username = "system"; role = "admin"; tenant_id = TENANT_ID
+        username = "system"; role = "admin"; tenant_id = tenant_id
     req = EvaluateRequest(**{k: v for k, v in payload.items()
                              if k in EvaluateRequest.model_fields})
     try:
         from services.uw_engine import run_evaluation
-        result = run_evaluation(req.model_dump(), "system", TENANT_ID)
+        result = run_evaluation(req.model_dump(), "system", tenant_id)
     except ImportError:
         result = _fallback_evaluate(req, _FakeUser())
     extra = payload.get("extra_debit_points", 0) or 0
@@ -179,7 +180,7 @@ def _compute_status(decisions: list[BenefitDecisionOut]) -> str:
     if all(o == "REFERRED" for o in outcomes):  return "ALL_REFERRED"
     return "PARTIAL_APPROVAL"
 
-def _persist(conn, body, decisions, overall_status, total_premium) -> str:
+def _persist(conn, body, decisions, overall_status, total_premium, tenant_id: str) -> str:
     cur = conn.cursor()
     pid = str(uuid.uuid4())
     try:
@@ -193,7 +194,7 @@ def _persist(conn, body, decisions, overall_status, total_premium) -> str:
                   total_annual_premium=EXCLUDED.total_annual_premium,
                   updated_at=now()
             RETURNING id
-        """, (pid, body.proposal_ref, TENANT_ID, body.applicant_ref,
+        """, (pid, body.proposal_ref, tenant_id, body.applicant_ref,
               overall_status, total_premium, body.premium_mode,
               body.source, "system"))
         row = cur.fetchone()
@@ -225,7 +226,7 @@ def _persist(conn, body, decisions, overall_status, total_premium) -> str:
 
 @router.post("/underwriting/evaluate-proposal",
              response_model=ProposalEvaluateResponse)
-def evaluate_proposal(body: ProposalEvaluateRequest):
+def evaluate_proposal(body: ProposalEvaluateRequest, current: CurrentUser):
     if not body.benefits:
         raise HTTPException(400, "At least one benefit required")
     if len(body.benefits) > 10:
@@ -247,7 +248,7 @@ def evaluate_proposal(body: ProposalEvaluateRequest):
             # Validate product
             cur.execute(
                 "SELECT product_code FROM products WHERE product_code=%s AND tenant_id=%s",
-                (benefit.product_code, TENANT_ID))
+                (benefit.product_code, current.tenant_id))
             if not cur.fetchone():
                 decisions.append(BenefitDecisionOut(
                     product_code=benefit.product_code, benefit_type=benefit.benefit_type,
@@ -263,7 +264,7 @@ def evaluate_proposal(body: ProposalEvaluateRequest):
                 cur.execute(
                     "SELECT id FROM product_benefit_config WHERE tenant_id=%s"
                     " AND base_product_code=%s AND rider_product_code=%s AND is_active=true",
-                    (TENANT_ID, base_code, benefit.product_code))
+                    (current.tenant_id, base_code, benefit.product_code))
                 if not cur.fetchone():
                     decisions.append(BenefitDecisionOut(
                         product_code=benefit.product_code, benefit_type=benefit.benefit_type,
@@ -291,7 +292,7 @@ def evaluate_proposal(body: ProposalEvaluateRequest):
             # Run evaluation
             try:
                 payload = _build_payload(body, benefit)
-                result  = _run_eval(conn, payload)
+                result  = _run_eval(conn, payload, current.tenant_id)
                 outcome   = result.get("outcome", "REFERRED")
                 risk_class= result.get("risk_class")
                 ndp       = result.get("net_debit_points", 0) or 0
@@ -341,7 +342,7 @@ def evaluate_proposal(body: ProposalEvaluateRequest):
 
         # Persist
         try:
-            proposal_id = _persist(conn, body, decisions, overall_status, total_premium)
+            proposal_id = _persist(conn, body, decisions, overall_status, total_premium, current.tenant_id)
         except Exception as pe:
             logger.error(f"Persist failed: {pe}")
             proposal_id = str(uuid.uuid4())
@@ -353,8 +354,8 @@ def evaluate_proposal(body: ProposalEvaluateRequest):
             _c2 = _gc()
             _cur2 = _c2.cursor()
             _cur2.execute(
-                "SELECT email, full_name FROM applicant_master WHERE applicant_ref=%s LIMIT 1",
-                (body.applicant_ref,))
+                "SELECT email, full_name FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s LIMIT 1",
+                (body.applicant_ref, current.tenant_id))
             _row = _cur2.fetchone()
             _cur2.close()
             if _row:
@@ -403,12 +404,12 @@ def evaluate_proposal(body: ProposalEvaluateRequest):
                  "total_premium":total_premium})
 
 @router.get("/underwriting/proposals")
-def list_proposals(page: int=1, per_page: int=20, status: Optional[str]=None):
+def list_proposals(page: int=1, per_page: int=20, status: Optional[str]=None, current: CurrentUser = None):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
         where  = "WHERE p.tenant_id=%s"
-        params = [TENANT_ID]
+        params = [current.tenant_id if current else "00000000-0000-0000-0000-000000000001"]
         if status:
             where += " AND p.overall_status=%s"
             params.append(status)
@@ -429,12 +430,12 @@ def list_proposals(page: int=1, per_page: int=20, status: Optional[str]=None):
         release(conn)
 
 @router.get("/underwriting/proposals/{proposal_id}")
-def get_proposal(proposal_id: str):
+def get_proposal(proposal_id: str, current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM proposal WHERE id=%s AND tenant_id=%s",
-                    (proposal_id, TENANT_ID))
+                    (proposal_id, current.tenant_id))
         proposal = cur.fetchone()
         if not proposal:
             raise HTTPException(404, "Proposal not found")

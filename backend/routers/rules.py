@@ -189,7 +189,8 @@ def list_custom_rules(user: CurrentUser = CurrentUser):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM custom_uw_rule ORDER BY created_at DESC"
+            "SELECT * FROM custom_uw_rule WHERE tenant_id=%s ORDER BY created_at DESC",
+            (user.tenant_id,),
         )
         rows = cur.fetchall()
         cur.close()
@@ -285,8 +286,8 @@ def update_rule_workflow(
         conn.autocommit = False
         cur = conn.cursor()
         cur.execute(
-            "UPDATE custom_uw_rule SET status=%s, updated_at=now() WHERE id=%s",
-            (body.new_status, rule_id),
+            "UPDATE custom_uw_rule SET status=%s, updated_at=now() WHERE id=%s AND tenant_id=%s",
+            (body.new_status, rule_id, user.tenant_id),
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Rule not found")
@@ -310,7 +311,10 @@ def delete_custom_rule(rule_id: str, user: CurrentUser = CurrentUser):
     try:
         conn.autocommit = False
         cur = conn.cursor()
-        cur.execute("DELETE FROM custom_uw_rule WHERE id=%s", (rule_id,))
+        cur.execute(
+            "DELETE FROM custom_uw_rule WHERE id=%s AND tenant_id=%s",
+            (rule_id, user.tenant_id),
+        )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Rule not found")
         conn.commit()

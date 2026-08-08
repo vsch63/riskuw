@@ -323,9 +323,9 @@ def get_case_detail(case_id: int, current: CurrentUser):
                     SELECT ai_engine AS engine, ai_decision AS decision, ai_risk_tier AS risk_tier,
                            ai_risk_score AS risk_score, ai_narrative AS narrative, created_at
                     FROM batch_job_records
-                    WHERE applicant_ref = %s AND ai_engine IS NOT NULL
+                    WHERE applicant_ref = %s AND tenant_id = %s AND ai_engine IS NOT NULL
                     ORDER BY created_at DESC LIMIT 5
-                """, (case.get("applicant_ref"),))
+                """, (case.get("applicant_ref"), current.tenant_id))
                 ai_history = [_row(r) for r in cur.fetchall()]
                 for h in ai_history:
                     h["risk_score"] = float(h["risk_score"]) if h.get("risk_score") is not None else None

@@ -69,7 +69,7 @@ def list_members(
     conn, release = _db()
     try:
         cur = conn.cursor()
-        where, params = [], []
+        where, params = ["m.tenant_id = %s"], [current.tenant_id]
         if active_only:
             where.append("m.is_active = true")
         if search:
@@ -203,7 +203,7 @@ async def upload_members(
         row_conn, row_release = _db()
         try:
             cur = row_conn.cursor()
-            cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s", (ref,))
+            cur.execute("SELECT id FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s", (ref, current.tenant_id))
             exists = cur.fetchone()
 
             if exists:
@@ -219,33 +219,33 @@ async def upload_members(
                         occupation=%s, group_name=%s, employee_id=%s,
                         department=%s, nominee_name=%s, nominee_relation=%s,
                         updated_at=now()
-                    WHERE applicant_ref=%s
+                    WHERE applicant_ref=%s AND tenant_id=%s
                 """, (
                     g("full_name"), g("email"), g("phone"), g("mobile"),
                     g("dob"), g("gender"), g("address_line1"), g("address_line2"),
                     g("city"), g("state"), g("pincode"), g("country","India"),
                     g("occupation"), g("group_name"), g("employee_id"),
                     g("department"), g("nominee_name"), g("nominee_relation"),
-                    ref,
+                    ref, current.tenant_id,
                 ))
                 row_conn.commit()
                 updated += 1
             else:
                 cur.execute("""
                     INSERT INTO applicant_master (
-                        applicant_ref, full_name, email, phone, mobile,
+                        applicant_ref, tenant_id, full_name, email, phone, mobile,
                         dob, gender, address_line1, address_line2,
                         city, state, pincode, country, occupation,
                         group_name, employee_id, department,
                         nominee_name, nominee_relation,
                         is_active, source, uploaded_by
                     ) VALUES (
-                        %s,%s,%s,%s,%s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                         %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                         true,'UPLOAD',%s
                     )
                 """, (
-                    ref, g("full_name",""), g("email"), g("phone"), g("mobile"),
+                    ref, current.tenant_id, g("full_name",""), g("email"), g("phone"), g("mobile"),
                     g("dob"), g("gender"), g("address_line1"), g("address_line2"),
                     g("city"), g("state"), g("pincode"), g("country","India"),
                     g("occupation"), g("group_name"), g("employee_id"),
@@ -295,8 +295,8 @@ def create_member(body: MemberIn, current: CurrentUser):
         cur = conn.cursor()
         # Check duplicate applicant_ref
         cur.execute(
-            "SELECT id FROM applicant_master WHERE applicant_ref = %s",
-            (body.applicant_ref,)
+            "SELECT id FROM applicant_master WHERE applicant_ref = %s AND tenant_id = %s",
+            (body.applicant_ref, current.tenant_id)
         )
         if cur.fetchone():
             raise HTTPException(
@@ -305,7 +305,7 @@ def create_member(body: MemberIn, current: CurrentUser):
             )
         cur.execute("""
             INSERT INTO applicant_master (
-                applicant_ref, salutation, full_name, middle_name,
+                applicant_ref, tenant_id, salutation, full_name, middle_name,
                 email, phone, mobile, alternate_phone,
                 dob, gender, address_line1, address_line2,
                 city, state, pincode, country, nationality,
@@ -314,12 +314,12 @@ def create_member(body: MemberIn, current: CurrentUser):
                 group_name, employee_id, department,
                 is_active, source, uploaded_by
             ) VALUES (
-                %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s,
+                %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s,
                 %s,%s,%s,%s,%s, %s,%s,%s,%s,
                 %s,%s,%s, %s,%s,%s, %s,%s,%s
             ) RETURNING id
         """, (
-            body.applicant_ref, body.salutation, body.full_name, body.middle_name,
+            body.applicant_ref, current.tenant_id, body.salutation, body.full_name, body.middle_name,
             body.email, body.phone, body.mobile, body.alternate_phone,
             body.dob, body.gender, body.address_line1, body.address_line2,
             body.city, body.state, body.pincode, body.country, body.nationality,
@@ -342,8 +342,8 @@ def get_member(applicant_ref: str, current: CurrentUser):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM applicant_master WHERE applicant_ref = %s",
-            (applicant_ref,)
+            "SELECT * FROM applicant_master WHERE applicant_ref = %s AND tenant_id = %s",
+            (applicant_ref, current.tenant_id)
         )
         row = cur.fetchone()
         cur.close()
@@ -369,7 +369,7 @@ def update_member(applicant_ref: str, body: MemberIn, current: CurrentUser):
                 nominee_name=%s, nominee_relation=%s, nominee_dob=%s,
                 group_name=%s, employee_id=%s, department=%s,
                 is_active=%s, updated_at=now()
-            WHERE applicant_ref=%s
+            WHERE applicant_ref=%s AND tenant_id=%s
         """, (
             body.salutation, body.full_name, body.middle_name,
             body.email, body.phone, body.mobile, body.alternate_phone,
@@ -378,7 +378,7 @@ def update_member(applicant_ref: str, body: MemberIn, current: CurrentUser):
             body.pan_number, body.aadhar_masked, body.occupation, body.annual_income,
             body.nominee_name, body.nominee_relation, body.nominee_dob,
             body.group_name, body.employee_id, body.department,
-            body.is_active, applicant_ref,
+            body.is_active, applicant_ref, current.tenant_id,
         ))
         conn.commit()
         cur.close()
@@ -393,8 +393,8 @@ def delete_member(applicant_ref: str, current: CurrentUser):
     try:
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM applicant_master WHERE applicant_ref=%s",
-            (applicant_ref,)
+            "DELETE FROM applicant_master WHERE applicant_ref=%s AND tenant_id=%s",
+            (applicant_ref, current.tenant_id)
         )
         conn.commit()
         cur.close()

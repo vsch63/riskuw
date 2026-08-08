@@ -169,9 +169,9 @@ async def upload_batch(
             INSERT INTO batch_jobs (
                 id, job_number, job_name, status, total_records, dry_run,
                 skip_product_errors, policy_effective_date, policy_expire_date,
-                input_filename, submitted_by, submitted_at
+                input_filename, submitted_by, tenant_id, submitted_at
             ) VALUES (
-                %s, %s, %s, 'QUEUED', %s, %s, %s, %s, %s, %s, %s, now()
+                %s, %s, %s, 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, now()
             ) RETURNING id, job_number
         """, (
             job_id, job_number,
@@ -179,7 +179,7 @@ async def upload_batch(
             total, dry_run, skip_product_errors,
             policy_effective_date or None,
             policy_expire_date or None,
-            filename, current.username,
+            filename, current.username, current.tenant_id,
         ))
         row = cur.fetchone()
         conn.commit()
@@ -195,7 +195,7 @@ async def upload_batch(
         background_tasks.add_task(
             _run_batch_job, job_id, file_bytes, filename, dry_run,
             skip_product_errors, policy_effective_date, policy_expire_date,
-            current.username, ai_engine
+            current.username, ai_engine, current.tenant_id
         )
 
         return {
@@ -211,16 +211,16 @@ async def upload_batch(
 
 def _run_batch_job(job_id, file_bytes, filename, dry_run,
                    skip_product_errors, eff_date, exp_date, username,
-                   ai_engine="rules_only"):
+                   ai_engine="rules_only", tenant_id=None):
     """Background task to process batch job."""
     import logging as _logging
     _logger = _logging.getLogger("uw_platform")
     try:
         from services.batch_processor import process_batch_job
-        process_batch_job(job_id, file_bytes, filename, username, username, ai_engine=ai_engine)
+        process_batch_job(job_id, file_bytes, filename, username, tenant_id, ai_engine=ai_engine)
     except (ImportError, TypeError):
         _fallback_process(job_id, file_bytes, filename, dry_run,
-                         skip_product_errors, username, ai_engine)
+                         skip_product_errors, username, ai_engine, tenant_id)
     except Exception as e:
         _logger.error(f"Batch job {job_id} failed: {e}", exc_info=True)
         conn, release = _jobs_db()
@@ -397,7 +397,8 @@ def _get_active_user_labels(cur) -> list[dict]:
 
 
 def _fallback_process(job_id, file_bytes, filename, dry_run,
-                      skip_product_errors, username, ai_engine="rules_only"):
+                      skip_product_errors, username, ai_engine="rules_only",
+                      tenant_id=None):
     """Fallback batch processor if service not available."""
     import csv, io as _io, json
     import logging as _logging
@@ -510,7 +511,7 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                     import types
                     fake_auth = types.SimpleNamespace(
                         username=username, role="underwriter",
-                        tenant_id="00000000-0000-0000-0000-000000000001"
+                        tenant_id=tenant_id
                     )
                     try:
                         prop_body = ProposalRequest(**proposal_payload)
@@ -532,8 +533,8 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                             INSERT INTO batch_job_records
                                 (job_id, row_number, applicant_ref, product_code,
                                  status, outcome, risk_class, net_debit_points,
-                                 primary_reason, processing_ms, created_at)
-                            VALUES (%s,%s,%s,%s,'PROCESSED',%s,%s,%s,%s,%s,now())
+                                 primary_reason, processing_ms, tenant_id, created_at)
+                            VALUES (%s,%s,%s,%s,'PROCESSED',%s,%s,%s,%s,%s,%s,now())
                         """, (
                             job_id, row_num,
                             base_row.get("applicant_ref", pref),
@@ -543,6 +544,7 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                             br.get("net_debit_points",0),
                             f"PROPOSAL:{pref} | BENEFIT:{br.get('benefit_type','')} | {('EXCLUSIONS:' + str(br.get('exclusions',[]))) if br.get('exclusions') else ''}",
                             br.get("processing_ms",0),
+                            tenant_id,
                         ))
                 else:
                     # Dry run — just count as would-be approved
@@ -572,14 +574,15 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                         INSERT INTO batch_job_records
                             (job_id, row_number, applicant_ref, product_code,
                              status, outcome, risk_class, net_debit_points,
-                             primary_reason, error_codes, processing_ms, created_at)
-                        VALUES (%s,%s,%s,%s,'ERROR','ERROR','',0,%s,%s,0,now())
+                             primary_reason, error_codes, tenant_id, processing_ms, created_at)
+                        VALUES (%s,%s,%s,%s,'ERROR','ERROR','',0,%s,%s,%s,0,now())
                     """, (
                         job_id, i,
                         payload.get("applicant_ref", ""),
                         product_code,
                         err_msg,
                         "PROD001",
+                        tenant_id,
                     ))
                     if i % 50 == 0:
                         conn.commit()
@@ -691,8 +694,8 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                          primary_reason, error_codes,
                          premium, premium_note, input_data,
                          ai_engine, ai_decision, ai_risk_tier, ai_risk_score, ai_narrative,
-                         processing_ms, created_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,now())
+                         tenant_id, processing_ms, created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,now())
                 """, (
                     job_id, i,
                     payload.get("applicant_ref",""),
@@ -711,6 +714,7 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                     None if dry_run else ai_risk_tier,
                     None if dry_run else ai_risk_score,
                     None if dry_run else ai_narrative,
+                    tenant_id,
                 ))
                 if i % 50 == 0:
                     conn.commit()
@@ -769,8 +773,9 @@ def list_jobs(current: CurrentUser, limit: int = 50):
                    input_filename, error_message, submitted_by,
                    submitted_at, started_at, completed_at
             FROM batch_jobs
+            WHERE tenant_id = %s
             ORDER BY submitted_at DESC LIMIT %s
-        """, (limit,))
+        """, (current.tenant_id, limit))
         rows = [_fmt_job(dict(r)) for r in cur.fetchall()]
         cur.close()
         return rows
@@ -789,8 +794,8 @@ def get_job(job_id: str, current: CurrentUser):
                    referred_count, errored_count, dry_run,
                    input_filename, error_message, submitted_by,
                    submitted_at, started_at, completed_at
-            FROM batch_jobs WHERE id=%s
-        """, (job_id,))
+            FROM batch_jobs WHERE id=%s AND tenant_id=%s
+        """, (job_id, current.tenant_id))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Job not found")
@@ -820,8 +825,8 @@ def cancel_job(job_id: str, current: CurrentUser):
         cur = conn.cursor()
         cur.execute("""
             UPDATE batch_jobs SET status='CANCELLED', completed_at=now()
-            WHERE id=%s AND status IN ('QUEUED','RUNNING')
-        """, (job_id,))
+            WHERE id=%s AND tenant_id=%s AND status IN ('QUEUED','RUNNING')
+        """, (job_id, current.tenant_id))
         conn.commit()
         cur.close()
         return {"message": "Job cancelled"}
@@ -848,18 +853,19 @@ def get_job_records(
         outcome_filter = ""
         params = [job_id]
         if outcome:
-            outcome_filter = "AND outcome ILIKE %s"
+            outcome_filter = "AND r.outcome ILIKE %s"
             params.append(f"%{outcome}%")
 
         cur.execute(f"""
-            SELECT row_number, applicant_ref, product_code, status, outcome,
-                   risk_class, net_debit_points, primary_reason, error_codes,
-                   premium, premium_note, ai_decision, ai_risk_score
-            FROM batch_job_records
-            WHERE job_id = %s {outcome_filter}
-            ORDER BY row_number
+            SELECT r.row_number, r.applicant_ref, r.product_code, r.status, r.outcome,
+                   r.risk_class, r.net_debit_points, r.primary_reason, r.error_codes,
+                   r.premium, r.premium_note, r.ai_decision, r.ai_risk_score
+            FROM batch_job_records r
+            JOIN batch_jobs bj ON bj.id = r.job_id AND bj.tenant_id = %s
+            WHERE r.job_id = %s {outcome_filter}
+            ORDER BY r.row_number
             LIMIT %s OFFSET %s
-        """, params + [per_page, offset])
+        """, [current.tenant_id] + params + [per_page, offset])
         rows = [dict(r) if hasattr(r, 'keys') else {
             'row_number': r[0], 'applicant_ref': r[1], 'product_code': r[2],
             'status': r[3], 'outcome': r[4], 'risk_class': r[5],
@@ -868,7 +874,12 @@ def get_job_records(
             'ai_decision': r[11], 'ai_risk_score': r[12],
         } for r in cur.fetchall()]
 
-        cur.execute("SELECT COUNT(*) FROM batch_job_records WHERE job_id = %s", (job_id,))
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM batch_job_records r
+            JOIN batch_jobs bj ON bj.id = r.job_id AND bj.tenant_id = %s
+            WHERE r.job_id = %s
+        """, (current.tenant_id, job_id))
         count_row = cur.fetchone()
         total = count_row["count"] if count_row else 0
         cur.close()
@@ -894,9 +905,10 @@ def download_results(job_id: str, type: str, fmt: str = "csv", current: CurrentU
                    r.ai_engine, r.ai_decision, r.ai_risk_tier,
                    r.ai_risk_score, r.ai_narrative
             FROM batch_job_records r
+            JOIN batch_jobs bj ON bj.id = r.job_id AND bj.tenant_id = %s
             WHERE r.job_id = %s
             ORDER BY r.row_number
-        """, (job_id,))
+        """, (current.tenant_id, job_id))
         rows = [dict(r) for r in cur.fetchall()]
 
         # ── Get active user labels to include as columns ──────────────────────

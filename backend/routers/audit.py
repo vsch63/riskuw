@@ -30,14 +30,25 @@ def _get_db():
     return conn, release_conn
 
 
+def _bypass_tenant_scope(current: CurrentUser, scope: str) -> bool:
+    """Only admin/super_admin with scope=all may see every tenant's events
+    (compliance/ops view). Everyone else is strictly tenant-scoped."""
+    return scope == "all" and current.role in {"admin", "super_admin"}
+
+
 # ── Stats ──────────────────────────────────────────────────────────────────────
 
 @router.get("/stats")
-def get_stats(current: CurrentUser):
+def get_stats(current: CurrentUser, scope: str = Query("")):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        tenant_clause = ""
+        params: list = []
+        if not _bypass_tenant_scope(current, scope):
+            tenant_clause = " AND tenant_id = %s"
+            params.append(current.tenant_id)
+        cur.execute(f"""
             SELECT
                 COUNT(*)                                                    AS total,
                 COUNT(*) FILTER (WHERE event_category = 'DECISION')        AS decisions,
@@ -48,8 +59,8 @@ def get_stats(current: CurrentUser):
                 COUNT(*) FILTER (WHERE event_category = 'USER_MGMT')       AS user_mgmt,
                 COUNT(*) FILTER (WHERE outcome = 'FAILURE')                AS failures
             FROM audit_trail
-            WHERE occurred_at >= NOW() - INTERVAL '30 days'
-        """)
+            WHERE occurred_at >= NOW() - INTERVAL '30 days' {tenant_clause}
+        """, params)
         row = cur.fetchone()
         cur.close()
         if not row:
@@ -73,6 +84,7 @@ def list_events(
     outcome:    str  = Query("All"),
     page:       int  = Query(1, ge=1),
     page_size:  int  = Query(50, ge=1, le=200),
+    scope:      str  = Query("", description="'all' — admin/super_admin only — see every tenant's events"),
 ):
     conn, release = _get_db()
     try:
@@ -81,6 +93,10 @@ def list_events(
         # Build WHERE
         conditions = []
         params: list = []
+
+        if not _bypass_tenant_scope(current, scope):
+            conditions.append("tenant_id = %s")
+            params.append(current.tenant_id)
 
         if date_from:
             try:
@@ -178,12 +194,17 @@ def export_csv(
     date_to:   str = Query(""),
     category:  str = Query("All"),
     outcome:   str = Query("All"),
+    scope:     str = Query("", description="'all' — admin/super_admin only — export every tenant's events"),
 ):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
         conditions = []
         params: list = []
+
+        if not _bypass_tenant_scope(current, scope):
+            conditions.append("tenant_id = %s")
+            params.append(current.tenant_id)
 
         if date_from:
             try: conditions.append("occurred_at >= %s"); params.append(datetime.fromisoformat(date_from))
@@ -231,16 +252,21 @@ def export_csv(
 # ── Single event detail ────────────────────────────────────────────────────────
 
 @router.get("/entity/{entity_id}")
-def get_entity_timeline(entity_id: str, current: CurrentUser):
+def get_entity_timeline(entity_id: str, current: CurrentUser, scope: str = Query("")):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        tenant_clause = ""
+        params = [entity_id]
+        if not _bypass_tenant_scope(current, scope):
+            tenant_clause = " AND tenant_id = %s"
+            params.append(current.tenant_id)
+        cur.execute(f"""
             SELECT occurred_at, event_type, actor_username, outcome, event_category
             FROM audit_trail
-            WHERE entity_id::text = %s
+            WHERE entity_id::text = %s {tenant_clause}
             ORDER BY occurred_at ASC
-        """, (entity_id,))
+        """, params)
         rows = cur.fetchall()
         cur.close()
         return [
@@ -258,17 +284,22 @@ def get_entity_timeline(entity_id: str, current: CurrentUser):
 
 
 @router.get("/{event_id}")
-def get_event(event_id: str, current: CurrentUser):
+def get_event(event_id: str, current: CurrentUser, scope: str = Query("")):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        tenant_clause = ""
+        params = [event_id]
+        if not _bypass_tenant_scope(current, scope):
+            tenant_clause = " AND tenant_id = %s"
+            params.append(current.tenant_id)
+        cur.execute(f"""
             SELECT event_id, occurred_at, event_category, event_type,
                    actor_username, actor_role, entity_type, entity_id::text,
                    entity_ref, outcome, failure_reason,
                    before_state, after_state, event_metadata, actor_ip
-            FROM audit_trail WHERE event_id = %s::uuid
-        """, (event_id,))
+            FROM audit_trail WHERE event_id = %s::uuid {tenant_clause}
+        """, params)
         row = cur.fetchone()
         cur.close()
         if not row:
@@ -295,10 +326,10 @@ def seed_login_event(body: SeedBody, current: CurrentUser):
         cur.execute("""
             INSERT INTO audit_trail
                 (event_category, event_type, actor_username, actor_role,
-                 entity_type, entity_id, outcome, event_metadata, occurred_at)
-            VALUES ('AUTH', 'LOGIN_SUCCESS', %s, %s, 'USER', %s, 'SUCCESS', %s::jsonb, NOW())
+                 tenant_id, entity_type, entity_id, outcome, event_metadata, occurred_at)
+            VALUES ('AUTH', 'LOGIN_SUCCESS', %s, %s, %s, 'USER', %s, 'SUCCESS', %s::jsonb, NOW())
         """, (
-            current.username, current.role, current.username,
+            current.username, current.role, current.tenant_id, current.username,
             json.dumps({"method": "manual_seed", "note": body.note})
         ))
         conn.commit(); cur.close()

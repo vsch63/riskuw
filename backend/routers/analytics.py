@@ -6,7 +6,7 @@ GET /underwriting/analytics   — underwriting-specific analytics
 """
 from __future__ import annotations
 from datetime import datetime, timezone
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from deps import CurrentUser
 
 router = APIRouter(tags=["analytics"])
@@ -32,6 +32,7 @@ def analytics_summary(
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
 
         # ── Core decision counts ──────────────────────────────────────────────
         cur.execute("""
@@ -44,9 +45,10 @@ def analytics_summary(
                 COUNT(*) FILTER (WHERE status = 'ERROR')                        AS errored,
                 ROUND(AVG(processing_ms))                                       AS avg_processing_ms
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND created_at BETWEEN %s AND %s
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         core = dict(cur.fetchone() or {})
 
         total = core.get("total_cases") or 0
@@ -61,12 +63,13 @@ def analytics_summary(
                 COUNT(*) FILTER (WHERE outcome ILIKE '%%DECLINED%%')            AS declined,
                 COUNT(*) FILTER (WHERE outcome ILIKE '%%REFERRED%%')            AS referred
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND created_at BETWEEN %s AND %s
             GROUP BY DATE(created_at)
             ORDER BY day DESC
             LIMIT 30
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         daily_trend = [dict(r) for r in cur.fetchall()]
         for row in daily_trend:
             if row.get("day"):
@@ -89,11 +92,12 @@ def analytics_summary(
                 END                                                             AS uw_pathway,
                 COUNT(*)                                                        AS count
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND created_at BETWEEN %s AND %s
             GROUP BY 1, 2
             ORDER BY count DESC
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         outcome_dist = [dict(r) for r in cur.fetchall()]
 
         # ── Risk class distribution ───────────────────────────────────────────
@@ -102,12 +106,13 @@ def analytics_summary(
                 COALESCE(NULLIF(risk_class,''), 'UNKNOWN')                      AS risk_class,
                 COUNT(*)                                                        AS count
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND outcome ILIKE '%%APPROVED%%'
               AND created_at BETWEEN %s AND %s
             GROUP BY risk_class
             ORDER BY count DESC
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         risk_dist = [dict(r) for r in cur.fetchall()]
 
         # ── Top products ──────────────────────────────────────────────────────
@@ -118,13 +123,14 @@ def analytics_summary(
                 COUNT(*) FILTER (WHERE outcome ILIKE '%%APPROVED%%')            AS approved,
                 COUNT(*) FILTER (WHERE outcome ILIKE '%%DECLINED%%')            AS declined
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND created_at BETWEEN %s AND %s
               AND product_code IS NOT NULL
             GROUP BY product_code
             ORDER BY total DESC
             LIMIT 10
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         top_products = [dict(r) for r in cur.fetchall()]
 
         # ── Top decline reasons ───────────────────────────────────────────────
@@ -133,14 +139,15 @@ def analytics_summary(
                 COALESCE(NULLIF(primary_reason,''), 'Unknown') AS reason,
                 COUNT(*)                                       AS count
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND outcome ILIKE '%%DECLINED%%'
               AND created_at BETWEEN %s AND %s
               AND primary_reason IS NOT NULL AND primary_reason != ''
             GROUP BY primary_reason
             ORDER BY count DESC
             LIMIT 10
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         top_declines = [dict(r) for r in cur.fetchall()]
 
         # ── Batch job stats ───────────────────────────────────────────────────
@@ -155,9 +162,10 @@ def analytics_summary(
                 COUNT(*) FILTER (WHERE status='COMPLETED')                      AS completed_jobs,
                 COUNT(*) FILTER (WHERE status='FAILED')                         AS failed_jobs
             FROM batch_jobs
-            WHERE submitted_at BETWEEN %s AND %s
+            WHERE tenant_id = %s
+              AND submitted_at BETWEEN %s AND %s
               AND dry_run = false
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         batch_stats = dict(cur.fetchone() or {})
 
         # ── Premium stats ─────────────────────────────────────────────────────
@@ -167,10 +175,11 @@ def analytics_summary(
                 ROUND(AVG(premium) FILTER (WHERE premium > 0), 2)               AS avg_premium,
                 ROUND(SUM(premium) FILTER (WHERE premium > 0), 2)               AS total_premium
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND outcome ILIKE '%%APPROVED%%'
               AND created_at BETWEEN %s AND %s
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         premium_stats = dict(cur.fetchone() or {})
 
         cur.close()
@@ -244,6 +253,7 @@ def uw_analytics(
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
 
         # ── Top fired error codes ─────────────────────────────────────────────
         cur.execute("""
@@ -251,13 +261,14 @@ def uw_analytics(
                 UNNEST(STRING_TO_ARRAY(error_codes, ','))                       AS code,
                 COUNT(*)                                                        AS count
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND error_codes IS NOT NULL AND error_codes != ''
               AND created_at BETWEEN %s AND %s
             GROUP BY code
             ORDER BY count DESC
             LIMIT 15
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         top_codes = [dict(r) for r in cur.fetchall()]
 
         # ── Debit point distribution ──────────────────────────────────────────
@@ -273,11 +284,12 @@ def uw_analytics(
                 END                                                             AS band,
                 COUNT(*)                                                        AS count
             FROM batch_job_records
-            WHERE status NOT IN ('DRY_RUN','ERROR')
+            WHERE tenant_id = %s
+              AND status NOT IN ('DRY_RUN','ERROR')
               AND created_at BETWEEN %s AND %s
             GROUP BY band
             ORDER BY MIN(net_debit_points)
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         debit_dist = [dict(r) for r in cur.fetchall()]
 
         # ── AI scoring stats ──────────────────────────────────────────────────
@@ -289,11 +301,12 @@ def uw_analytics(
                 COUNT(*) FILTER (WHERE ai_decision = 'DECLINE')                AS ai_decline,
                 ROUND(AVG(ai_risk_score), 1)                                   AS avg_score
             FROM batch_job_records
-            WHERE ai_engine IS NOT NULL
+            WHERE tenant_id = %s
+              AND ai_engine IS NOT NULL
               AND created_at BETWEEN %s AND %s
             GROUP BY ai_engine
             ORDER BY total DESC
-        """, (date_from, date_to + " 23:59:59"))
+        """, (tenant_id, date_from, date_to + " 23:59:59"))
         ai_stats = [dict(r) for r in cur.fetchall()]
 
         cur.close()

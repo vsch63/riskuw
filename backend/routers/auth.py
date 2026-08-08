@@ -75,18 +75,19 @@ def _make_token(username: str, role: str, tenant_id: str | None, expires_minutes
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-def _audit(conn, event_type: str, actor: str, entity_id: str, after: dict, ip: str | None = None):
+def _audit(conn, event_type: str, actor: str, entity_id: str, after: dict,
+           ip: str | None = None, tenant_id: str | None = None):
     try:
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO audit_trail
               (event_category, event_type, actor_username, entity_type,
-               entity_id, after_state, actor_ip, source)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,'API')
+               entity_id, after_state, actor_ip, tenant_id, source)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'API')
             """,
             ("AUTH", event_type, actor, "uw_user", entity_id,
-             __import__("json").dumps(after), ip),
+             __import__("json").dumps(after), ip, tenant_id),
         )
         cur.close()
     except Exception:
@@ -181,7 +182,8 @@ async def login(body: LoginRequest, request: Request):
                 body.username, user_dict["role"], user_dict["tenant_id"],
                 expires_minutes=5,
             )
-            _audit(conn, "MFA_CHALLENGE", body.username, body.username, {"ip": ip}, ip)
+            _audit(conn, "MFA_CHALLENGE", body.username, body.username, {"ip": ip}, ip,
+                   tenant_id=user_dict.get("tenant_id"))
             return TokenResponse(
                 access_token="",
                 username=body.username,
@@ -196,7 +198,8 @@ async def login(body: LoginRequest, request: Request):
         # No MFA — issue full token
         token = _make_token(body.username, user_dict["role"], user_dict["tenant_id"])
         _update_last_login(conn, body.username)
-        _audit(conn, "LOGIN_SUCCESS", body.username, body.username, {"ip": ip, "mfa": False}, ip)
+        _audit(conn, "LOGIN_SUCCESS", body.username, body.username, {"ip": ip, "mfa": False}, ip,
+               tenant_id=user_dict.get("tenant_id"))
         conn.commit()
 
         return TokenResponse(
@@ -300,7 +303,8 @@ async def verify_mfa(body: MFAVerifyRequest, request: Request):
 
         token = _make_token(body.username, role, tenant_id)
         _update_last_login(conn, body.username)
-        _audit(conn, "MFA_SUCCESS", body.username, body.username, {"ip": ip}, ip)
+        _audit(conn, "MFA_SUCCESS", body.username, body.username, {"ip": ip}, ip,
+               tenant_id=tenant_id)
         conn.commit()
 
         return TokenResponse(access_token=token, username=body.username, role=role, tenant_id=tenant_id)
@@ -349,7 +353,8 @@ async def mfa_setup(body: MFASetupRequest, request: Request):
             (body.username, secret),
         )
         conn.commit()
-        _audit(conn, "MFA_SETUP_INITIATED", body.username, body.username, {"ip": request.client.host})
+        _audit(conn, "MFA_SETUP_INITIATED", body.username, body.username, {"ip": request.client.host},
+               tenant_id=token_data.tenant_id)
         cur.close()
         return {"secret": secret, "otpauth_uri": otpauth_uri}
     finally:
@@ -396,7 +401,8 @@ async def mfa_verify_setup(body: MFAVerifySetupRequest, request: Request):
         cur.execute("UPDATE mfa_config SET last_used_at = now() WHERE username=%s", (body.username,))
         token = _make_token(body.username, role, tenant_id)
         _update_last_login(conn, body.username)
-        _audit(conn, "MFA_ENROLLMENT_COMPLETED", body.username, body.username, {"ip": request.client.host})
+        _audit(conn, "MFA_ENROLLMENT_COMPLETED", body.username, body.username, {"ip": request.client.host},
+               tenant_id=token_data.tenant_id)
         conn.commit()
         cur.close()
         return TokenResponse(access_token=token, username=body.username, role=role, tenant_id=tenant_id)
@@ -418,7 +424,8 @@ async def mfa_disable(body: MFASetupRequest, request: Request):
             "UPDATE mfa_config SET is_enabled=false, is_verified=false WHERE username=%s",
             (body.username,),
         )
-        _audit(conn, "MFA_DISABLED", body.username, body.username, {"ip": request.client.host})
+        _audit(conn, "MFA_DISABLED", body.username, body.username, {"ip": request.client.host},
+               tenant_id=token_data.tenant_id)
         conn.commit()
         cur.close()
         return {"status": "mfa_disabled"}
@@ -654,7 +661,8 @@ async def reset_password(username: str, body: PasswordReset, current: CurrentUse
             (_hash(body.new_password), current.username, username),
         )
         conn.commit()
-        _audit(conn, "PASSWORD_RESET", current.username, username, {"reset_by": current.username})
+        _audit(conn, "PASSWORD_RESET", current.username, username, {"reset_by": current.username},
+               tenant_id=current.tenant_id)
         conn.commit()
         cur.close()
         return {"status": "password_reset", "username": username}
@@ -686,7 +694,7 @@ async def forgot_password(body: dict, request: Request):
         # Look up by username or email
         cur.execute(
             """
-            SELECT username, email, full_name, is_active
+            SELECT username, email, full_name, is_active, tenant_id::text
             FROM uw_user
             WHERE (username = %s OR email = %s)
               AND is_deleted = false
@@ -699,7 +707,7 @@ async def forgot_password(body: dict, request: Request):
             return {"message": "If that account exists, a reset link has been sent."}
 
         user = dict(row) if hasattr(row, "keys") else dict(
-            zip(["username", "email", "full_name", "is_active"], row)
+            zip(["username", "email", "full_name", "is_active", "tenant_id"], row)
         )
 
         if not user.get("is_active"):
@@ -812,7 +820,8 @@ async def forgot_password(body: dict, request: Request):
             logging.getLogger("uw_platform").error(f"Password reset email failed: {mail_err}")
 
         _audit(conn, "PASSWORD_RESET_REQUESTED", user["username"],
-               user["username"], {"ip": request.client.host if request.client else None})
+               user["username"], {"ip": request.client.host if request.client else None},
+               tenant_id=user.get("tenant_id"))
         conn.commit()
 
         return {"message": "If that account exists, a reset link has been sent."}
@@ -935,8 +944,11 @@ async def reset_password_confirm(body: dict):
             (t["username"],),
         )
         conn.commit()
+        cur.execute("SELECT tenant_id::text FROM uw_user WHERE username = %s", (t["username"],))
+        _tenant_row = cur.fetchone()
+        reset_tenant = (_tenant_row[0] if isinstance(_tenant_row, tuple) else _tenant_row.get("tenant_id")) if _tenant_row else None
         _audit(conn, "PASSWORD_RESET_COMPLETED", t["username"], t["username"],
-               {"method": "self_reset"})
+               {"method": "self_reset"}, tenant_id=reset_tenant)
         conn.commit()
         cur.close()
         return {"message": "Password reset successfully. You can now log in."}

@@ -63,6 +63,7 @@ def create_manual_cession(
     risk_class: Optional[str] = None,
     treaty_reference: Optional[str] = None,
     actor: str = "system",
+    tenant_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Insert a manual ri_cession row.  Returns the new cession id or None on failure.
@@ -77,14 +78,15 @@ def create_manual_cession(
             INSERT INTO ri_cession
                 (case_id, reinsurer_id, cession_type,
                  gross_face_amount, ceded_amount,
-                 ri_reference, status, notes, created_at)
-            VALUES (%s, %s, 'MANUAL', %s, %s, %s, 'PENDING', %s, now())
+                 ri_reference, status, notes, tenant_id, created_at)
+            VALUES (%s, %s, 'MANUAL', %s, %s, %s, 'PENDING', %s, %s, now())
             ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (case_id, reinsurer_id, face_amount, cession_amount,
              treaty_reference,
-             f"risk_class: {risk_class}" if risk_class else None),
+             f"risk_class: {risk_class}" if risk_class else None,
+             tenant_id),
         )
         row = cur.fetchone()
         if not row:
@@ -96,9 +98,9 @@ def create_manual_cession(
             """
             INSERT INTO audit_trail
                 (event_category, event_type, actor_username,
-                 entity_type, entity_id, after_state, source)
+                 entity_type, entity_id, after_state, tenant_id, source)
             VALUES ('REINSURANCE', 'MANUAL_CESSION_CREATED', %s,
-                    'ri_cession', %s, %s::jsonb, 'API')
+                    'ri_cession', %s, %s::jsonb, %s, 'API')
             """,
             (
                 actor, new_id,
@@ -108,6 +110,7 @@ def create_manual_cession(
                     "ceded_amount": cession_amount,
                     "reinsurer_id": reinsurer_id,
                 }),
+                tenant_id,
             ),
         )
         conn.commit()

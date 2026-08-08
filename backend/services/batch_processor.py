@@ -171,14 +171,14 @@ def process_batch_job(job_id: str, file_bytes: bytes, filename: str,
                 INSERT INTO batch_job_records
                     (job_id, row_number, applicant_ref, product_code,
                      status, outcome, risk_class, net_debit_points,
-                     primary_reason, error_codes, processing_ms)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     primary_reason, error_codes, tenant_id, processing_ms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     job_id, i,
                     row.get("applicant_ref"), row.get("product_code"),
                     status, outcome, risk_class, net_debits,
-                    primary_reason, error_codes, processing_ms,
+                    primary_reason, error_codes, tenant_id, processing_ms,
                 ),
             )
             conn.commit()
