@@ -648,39 +648,118 @@ function NmlTab({ notify }: { notify: () => void }) {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [productOptions, setProductOptions] = useState<any[]>([])
   const [form] = Form.useForm()
+
   const load = async () => {
     setLoading(true)
     try { const { data } = await sarConfigAPI.listNml(); setRows(data || []) }
     catch (e: any) { message.error(e.message) } finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
-  const save = async () => {
+
+  // Dropdown source: active products (Product Config) — no free-text typos.
+  const loadProducts = async () => {
     try {
-      await sarConfigAPI.upsertNml(await form.validateFields())
-      message.success('NML band saved'); setOpen(false); form.resetFields(); load(); notify()
+      const pr = await productsAPI.list()
+      setProductOptions((pr.data || []).filter((p: any) => p.is_active))
     } catch (e: any) { message.error(e.message) }
   }
+  useEffect(() => { load(); loadProducts() }, [])
+
+  const openModal = (r?: any) => {
+    setEditing(r || null)
+    form.resetFields()
+    if (r) form.setFieldsValue({
+      product_code: r.product_code,
+      age_min: r.age_min,
+      age_max: r.age_max,
+      sar_min: r.sar_min,
+      sar_max: r.sar_max,
+      nml_category: r.nml_category,
+      medical_tests_required: r.medical_tests_required || [],
+      reinsurer_approval_required: r.reinsurer_approval_required,
+      is_active: r.is_active,
+      effective_date: r.effective_date ? dayjs(r.effective_date) : null,
+      expiry_date: r.expiry_date ? dayjs(r.expiry_date) : null,
+    })
+    setOpen(true)
+  }
+
+  const save = async () => {
+    const v = await form.validateFields()
+    const body = {
+      ...v,
+      effective_date: v.effective_date ? v.effective_date.format('YYYY-MM-DD') : null,
+      expiry_date: v.expiry_date ? v.expiry_date.format('YYYY-MM-DD') : null,
+    }
+    try {
+      await sarConfigAPI.upsertNml(body)
+      message.success(editing ? 'NML band updated — new version created' : 'NML band created')
+      setOpen(false); setEditing(null); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
+  // Soft delete: new is_active=false version supersedes the active one.
+  const deactivate = async (r: any) => {
+    try {
+      await sarConfigAPI.upsertNml({
+        product_code: r.product_code,
+        age_min: r.age_min,
+        age_max: r.age_max,
+        sar_min: r.sar_min,
+        sar_max: r.sar_max,
+        nml_category: r.nml_category,
+        medical_tests_required: r.medical_tests_required || [],
+        reinsurer_approval_required: r.reinsurer_approval_required,
+        is_active: false,
+      })
+      message.success('NML band deactivated — new inactive version created')
+      load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
   const cols = [
-    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 130, render: (v: string) => <span style={mono}>{v}</span> },
     { title: Titled('Ver', 'version'), dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
-    { title: 'Age', render: (_: any, r: any) => `${r.age_min ?? '≤'}–${r.age_max ?? '∞'}` },
-    { title: 'SAR Band', render: (_: any, r: any) => `${(r.sar_min ?? 0).toLocaleString('en-IN')} → ${r.sar_max ? r.sar_max.toLocaleString('en-IN') : '∞'}` },
+    { title: 'Age', width: 100, render: (_: any, r: any) => `${r.age_min ?? '≤'}–${r.age_max ?? '∞'}` },
+    { title: 'SAR Band', width: 140, render: (_: any, r: any) => `${(r.sar_min ?? 0).toLocaleString('en-IN')} → ${r.sar_max ? r.sar_max.toLocaleString('en-IN') : '∞'}` },
     { title: Titled('Category', 'nml_category'), dataIndex: 'nml_category', width: 130, render: (v: string) => <Tag color={v === 'NON_MEDICAL' ? 'green' : 'orange'}>{v}</Tag> },
     { title: Titled('Tests', 'medical_tests_required'), dataIndex: 'medical_tests_required', render: (v: string[]) => (v || []).join(', ') || '—' },
+    { title: Titled('Effective', 'effective_date'), dataIndex: 'effective_date', width: 105, render: (v?: string) => <span style={mono}>{v || 'today'}</span> },
+    { title: Titled('Expires', 'expiry_date'), dataIndex: 'expiry_date', width: 105, render: (v?: string) => <span style={mono}>{v || '—'}</span> },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: 'Actions', key: 'act', width: 150, render: (_: any, r: any) => (
+        <Space size={0}>
+          <Button size="small" type="link" onClick={() => openModal(r)}>Edit</Button>
+          <Popconfirm
+            title={`Deactivate this NML band?`}
+            description="New inactive version — the band stops applying."
+            okText="Deactivate" okButtonProps={{ danger: true }}
+            onConfirm={() => deactivate(r)} disabled={!r.is_active}
+          >
+            <Button size="small" type="link" danger disabled={!r.is_active}>Deactivate</Button>
+          </Popconfirm>
+        </Space>
+    ) },
   ]
+
   return (
     <div style={card}>
-      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New NML Band</Button>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => openModal()}>New NML Band</Button>
       <Table size="small" rowKey={(r) => r.id} dataSource={rows} columns={cols} loading={loading} pagination={false} />
-      <Modal title="Non-Medical Limit Band" open={open} onOk={save} onCancel={() => setOpen(false)} width={560} destroyOnClose>
+      <Modal title={editing ? `Edit NML Band · ${editing.product_code}` : 'New NML Band'}
+        open={open} onOk={save} onCancel={() => { setEditing(null); setOpen(false) }} width={560}>
         <Form form={form} layout="vertical" initialValues={{ nml_category: 'NON_MEDICAL', sar_min: 0, medical_tests_required: [], reinsurer_approval_required: false, is_active: true }}>
-          <Form.Item name="product_code" label="Product Code" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="product_code" label="Product Code" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="children" disabled={!!editing} placeholder="Select product"
+              options={productOptions.map(p => ({ value: p.product_code, label: `${p.product_code} · ${p.product_name ?? ''}` }))} />
+          </Form.Item>
           <Space wrap>
-            <Form.Item name="age_min" label="Age From"><InputNumber /></Form.Item>
-            <Form.Item name="age_max" label="Age To"><InputNumber /></Form.Item>
-            <Form.Item name="sar_min" label="SAR Min"><InputNumber style={{ width: 130 }} /></Form.Item>
-            <Form.Item name="sar_max" label="SAR Max"><InputNumber style={{ width: 130 }} /></Form.Item>
+            <Form.Item name="age_min" label="Age From" tooltip="Locked on edit — changing a band creates a new band."><InputNumber disabled={!!editing} /></Form.Item>
+            <Form.Item name="age_max" label="Age To"><InputNumber disabled={!!editing} /></Form.Item>
+            <Form.Item name="sar_min" label="SAR Min"><InputNumber disabled={!!editing} style={{ width: 130 }} /></Form.Item>
+            <Form.Item name="sar_max" label="SAR Max"><InputNumber disabled={!!editing} style={{ width: 130 }} /></Form.Item>
           </Space>
           <Form.Item name="nml_category" label="Category"><Select>
             {['NON_MEDICAL', 'MEDICAL', 'PARAMEDICAL', 'SPECIAL'].map(t => <Option key={t} value={t}>{t}</Option>)}
@@ -688,6 +767,18 @@ function NmlTab({ notify }: { notify: () => void }) {
           <Form.Item name="medical_tests_required" label="Medical Tests (comma-separated)">
             <Select mode="tags" placeholder="e.g. FULL_MEDICAL, HBA1C, ECG" tokenSeparators={[',']} />
           </Form.Item>
+          <Space style={{ width: '100%' }} wrap>
+            <Form.Item name="reinsurer_approval_required" label="Reinsurer approval" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
+          </Space>
+          <Space style={{ width: '100%' }} wrap>
+            <Form.Item name="effective_date" label="Effective From" tooltip="Blank = applies immediately. Future date = scheduled — the previous band stays active until this takes effect.">
+              <DatePicker style={{ width: 200 }} format="DD-MM-YYYY" />
+            </Form.Item>
+            <Form.Item name="expiry_date" label="Expires On" tooltip="Blank = no end date.">
+              <DatePicker style={{ width: 200 }} format="DD-MM-YYYY" />
+            </Form.Item>
+          </Space>
         </Form>
       </Modal>
     </div>
