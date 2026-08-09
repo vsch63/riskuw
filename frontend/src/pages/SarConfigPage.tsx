@@ -19,7 +19,7 @@ import {
 import { PlusOutlined, ReloadOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import MedicalStandardsPage from './MedicalStandardsPage'
 import { Titled } from '../components/ColHint'
-import { sarConfigAPI } from '../api/client'
+import { sarConfigAPI, productsAPI } from '../api/client'
 
 const { Option } = Select
 
@@ -359,39 +359,130 @@ function ExposureGroupsTab({ notify }: { notify: () => void }) {
 }
 
 // ─────────────────────────── Aggregation Rules ────────────────────
+// Sentinel value for "blank" (NULL) in the product/exposure dropdowns.
+// NULL means the rule applies to ALL products / ALL exposure groups.
+const ANY = '__ANY__'
+
 function AggregationTab({ notify }: { notify: () => void }) {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [riskGroups, setRiskGroups] = useState<any[]>([])
+  const [exposureOptions, setExposureOptions] = useState<any[]>([])
+  const [productOptions, setProductOptions] = useState<any[]>([])
   const [form] = Form.useForm()
+
   const load = async () => {
     setLoading(true)
     try { const { data } = await sarConfigAPI.listAggregationRules(); setRows(data || []) }
     catch (e: any) { message.error(e.message) } finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
-  const save = async () => {
+
+  // Dropdown sources: risk groups + exposure groups (Risk Groups/Exposure
+  // Groups tabs) and active products (Product Config) — no free-text typos.
+  const loadDropdowns = async () => {
     try {
-      await sarConfigAPI.createAggregationRule(await form.validateFields())
-      message.success('Aggregation rule created'); setOpen(false); form.resetFields(); load(); notify()
+      const [rg, eg, pr] = await Promise.all([
+        sarConfigAPI.listRiskGroups(),
+        sarConfigAPI.listExposureGroups(),
+        productsAPI.list(),
+      ])
+      setRiskGroups((rg.data || []).filter((g: any) => g.is_active))
+      setExposureOptions((eg.data || []).filter((e: any) => e.is_active))
+      setProductOptions((pr.data || []).filter((p: any) => p.is_active))
     } catch (e: any) { message.error(e.message) }
   }
+  useEffect(() => { load(); loadDropdowns() }, [])
+
+  const openModal = (r?: any) => {
+    setEditing(r || null)
+    form.resetFields()
+    if (r) form.setFieldsValue({
+      risk_group_code: r.risk_group_code,
+      exposure_group: r.exposure_group || ANY,
+      product_code: r.product_code || ANY,
+      aggregation_method: r.aggregation_method,
+      is_active: r.is_active,
+    })
+    setOpen(true)
+  }
+
+  const save = async () => {
+    const v = await form.validateFields()
+    // Blank → omit so the backend stores NULL (= any product / any exposure).
+    if (v.exposure_group === ANY) delete v.exposure_group
+    if (v.product_code === ANY) delete v.product_code
+    try {
+      await sarConfigAPI.createAggregationRule(v)
+      message.success(editing ? 'Aggregation rule updated — new version created' : 'Aggregation rule created')
+      setOpen(false); setEditing(null); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
+  // Soft delete: new is_active=false version supersedes the active one.
+  const deactivate = async (r: any) => {
+    try {
+      await sarConfigAPI.createAggregationRule({
+        risk_group_code: r.risk_group_code,
+        product_code: r.product_code || undefined,
+        exposure_group: r.exposure_group || undefined,
+        aggregation_method: r.aggregation_method,
+        is_active: false,
+      })
+      message.success('Aggregation rule deactivated — new inactive version created')
+      load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
   const cols = [
-    { title: Titled('Risk Group', 'risk_group_code'), dataIndex: 'risk_group_code', render: (v: string) => <Tag color="cyan">{v}</Tag> },
-    { title: Titled('Exposure Group', 'exposure_group'), dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Any</Tag> },
-    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', render: (v?: string) => v || <Tag>System</Tag> },
-    { title: Titled('Method', 'aggregation_method'), dataIndex: 'aggregation_method', width: 140, render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Risk Group', 'risk_group_code'), dataIndex: 'risk_group_code', width: 130, render: (v: string) => <Tag color="cyan">{v}</Tag> },
+    { title: Titled('Exposure', 'exposure_group'), dataIndex: 'exposure_group', width: 150, render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 150, render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: Titled('Method', 'aggregation_method'), dataIndex: 'aggregation_method', width: 130, render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: 'Actions', key: 'act', width: 150, render: (_: any, r: any) => (
+        <Space size={0}>
+          <Button size="small" type="link" onClick={() => openModal(r)}>Edit</Button>
+          <Popconfirm
+            title={`Deactivate this aggregation rule?`}
+            description="New inactive version — this (risk group, exposure, product) combination stops applying."
+            okText="Deactivate" okButtonProps={{ danger: true }}
+            onConfirm={() => deactivate(r)} disabled={!r.is_active}
+          >
+            <Button size="small" type="link" danger disabled={!r.is_active}>Deactivate</Button>
+          </Popconfirm>
+        </Space>
+    ) },
   ]
+
   return (
     <div style={card}>
-      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New Aggregation Rule</Button>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => openModal()}>New Aggregation Rule</Button>
       <Table size="small" rowKey={(r) => r.id} dataSource={rows} columns={cols} loading={loading} pagination={false} />
-      <Modal title="Aggregation Rule" open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>
+      <Modal title={editing ? `Edit Aggregation Rule · ${editing.risk_group_code}` : 'New Aggregation Rule'}
+        open={open} onOk={save} onCancel={() => { setEditing(null); setOpen(false) }} width={540}>
         <Form form={form} layout="vertical" initialValues={{ aggregation_method: 'SUM', is_active: true }}>
-          <Form.Item name="risk_group_code" label="Risk Group Code" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="exposure_group" label="Exposure Group (blank = any)"><Input /></Form.Item>
-          <Form.Item name="product_code" label="Product Code (blank = all products)"><Input /></Form.Item>
-          <Form.Item name="aggregation_method" label="Method"><Select>{AGG_METHODS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+          <Form.Item name="risk_group_code" label="Risk Group" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="children" disabled={!!editing} placeholder="Risk group"
+              options={riskGroups.map(g => ({ value: g.group_code, label: `${g.group_code} · ${g.aggregation_method}` }))} />
+          </Form.Item>
+          <Form.Item name="exposure_group" label="Exposure Group" tooltip="— Any (blank) — applies the rule to every exposure group.">
+            <Select showSearch optionFilterProp="children" disabled={!!editing}
+              options={[
+                { value: ANY, label: '— Any (blank) —' },
+                ...exposureOptions.map(e => ({ value: e.exposure_code, label: `${e.exposure_code} · ${e.exposure_name ?? ''}` })),
+              ]} />
+          </Form.Item>
+          <Form.Item name="product_code" label="Product Code" tooltip="— Any (blank) — applies the rule to every product.">
+            <Select showSearch optionFilterProp="children" disabled={!!editing}
+              options={[
+                { value: ANY, label: '— Any (blank) —' },
+                ...productOptions.map(p => ({ value: p.product_code, label: `${p.product_code} · ${p.product_name ?? ''}` })),
+              ]} />
+          </Form.Item>
+          <Form.Item name="aggregation_method" label="Aggregation Method"><Select>{AGG_METHODS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+          <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
         </Form>
       </Modal>
     </div>

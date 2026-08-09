@@ -234,3 +234,60 @@ def test_benefit_group_memberships_roundtrip(client, auth_headers):
         finally:
             cur.close()
             release_conn(conn)
+
+
+def test_aggregation_rule_blank_and_deactivate(client, auth_headers):
+    """Aggregation rules support product/exposure 'blank' (NULL = any) and
+    soft-deactivate via a new is_active=false version.
+
+    The UI's blank dropdown item maps to omitting the field, which the backend
+    must store as NULL — not the empty string — so the engine's "applies to
+    all products / all exposure groups" fallback keeps working.
+    """
+    RG = "RG-AGG-TST"
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM uw_aggregation_rule WHERE risk_group_id IN "
+                    "(SELECT id FROM uw_risk_group WHERE group_code = %s)", (RG,))
+        cur.execute("DELETE FROM uw_risk_group WHERE group_code = %s", (RG,))
+        conn.commit()
+    finally:
+        cur.close()
+        release_conn(conn)
+
+    try:
+        r = client.post("/sar-config/risk-groups", json={
+            "group_code": RG, "group_name": "Aggregation Rule Test", "aggregation_method": "SUM",
+        }, headers=auth_headers)
+        assert r.status_code in (200, 201), r.text
+
+        # blank product/exposure → NULL in the stored rule
+        r = client.post("/sar-config/aggregation-rules", json={
+            "risk_group_code": RG, "aggregation_method": "MAXIMUM",
+        }, headers=auth_headers)
+        assert r.status_code in (200, 201), r.text
+        lst = client.get("/sar-config/aggregation-rules", headers=auth_headers).json()
+        rule = [x for x in lst if x["risk_group_code"] == RG][0]
+        assert rule["product_code"] is None and rule["exposure_group"] is None, rule
+        assert rule["aggregation_method"] == "MAXIMUM" and rule["is_active"] is True
+
+        # deactivate → new version with is_active=false (supersedes)
+        r = client.post("/sar-config/aggregation-rules", json={
+            "risk_group_code": RG, "aggregation_method": "MAXIMUM", "is_active": False,
+        }, headers=auth_headers)
+        assert r.status_code in (200, 201), r.text
+        lst = client.get("/sar-config/aggregation-rules", headers=auth_headers).json()
+        rule = [x for x in lst if x["risk_group_code"] == RG][0]
+        assert rule["is_active"] is False, rule
+    finally:
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("DELETE FROM uw_aggregation_rule WHERE risk_group_id IN "
+                        "(SELECT id FROM uw_risk_group WHERE group_code = %s)", (RG,))
+            cur.execute("DELETE FROM uw_risk_group WHERE group_code = %s", (RG,))
+            conn.commit()
+        finally:
+            cur.close()
+            release_conn(conn)
