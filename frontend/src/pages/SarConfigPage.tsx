@@ -791,35 +791,107 @@ function RITab({ notify }: { notify: () => void }) {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<any>(null)
+  const [productOptions, setProductOptions] = useState<any[]>([])
   const [form] = Form.useForm()
+
   const load = async () => {
     setLoading(true)
     try { const { data } = await sarConfigAPI.listRI(); setRows(data || []) }
     catch (e: any) { message.error(e.message) } finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
+
+  // Dropdown source: active products (Product Config) — no free-text typos.
+  const loadProducts = async () => {
+    try {
+      const pr = await productsAPI.list()
+      setProductOptions((pr.data || []).filter((p: any) => p.is_active))
+    } catch (e: any) { message.error(e.message) }
+  }
+  useEffect(() => { load(); loadProducts() }, [])
+
   const openModal = (r?: any) => {
     setEditing(r || null)
     form.resetFields()
-    if (r) form.setFieldsValue(r)
+    if (r) form.setFieldsValue({
+      reinsurer_code: r.reinsurer_code,
+      reinsurer_name: r.reinsurer_name,
+      retention_limit: r.retention_limit,
+      currency: r.currency,
+      product_codes: r.product_codes || [],
+      treaty_code: r.treaty_code,
+      treaty_type: r.treaty_type,
+      contact_name: r.contact_name,
+      contact_email: r.contact_email,
+      notes: r.notes,
+      is_active: r.is_active,
+      treaty_effective_date: r.treaty_effective_date ? dayjs(r.treaty_effective_date) : null,
+      treaty_expiry_date: r.treaty_expiry_date ? dayjs(r.treaty_expiry_date) : null,
+    })
     setOpen(true)
   }
+
   const save = async () => {
+    const v = await form.validateFields()
+    const body = {
+      ...v,
+      treaty_effective_date: v.treaty_effective_date ? v.treaty_effective_date.format('YYYY-MM-DD') : null,
+      treaty_expiry_date: v.treaty_expiry_date ? v.treaty_expiry_date.format('YYYY-MM-DD') : null,
+    }
     try {
-      await sarConfigAPI.upsertRI(await form.validateFields())
-      message.success('Reinsurer saved'); setOpen(false); form.resetFields(); load(); notify()
+      await sarConfigAPI.upsertRI(body)
+      message.success(editing ? 'Reinsurer updated' : 'Reinsurer created')
+      setOpen(false); setEditing(null); form.resetFields(); load(); notify()
     } catch (e: any) { message.error(e.message) }
   }
+
+  // Deactivate: upsert the full row with is_active=false. RI has no versioning,
+  // so a partial upsert would wipe name/retention/etc. — send everything.
+  const deactivate = async (r: any) => {
+    try {
+      await sarConfigAPI.upsertRI({
+        reinsurer_code: r.reinsurer_code,
+        reinsurer_name: r.reinsurer_name,
+        retention_limit: r.retention_limit,
+        product_codes: r.product_codes || [],
+        treaty_code: r.treaty_code,
+        treaty_type: r.treaty_type || 'FACULTATIVE',
+        contact_name: r.contact_name,
+        contact_email: r.contact_email,
+        currency: r.currency || 'INR',
+        is_active: false,
+        notes: r.notes,
+        treaty_effective_date: r.treaty_effective_date || null,
+        treaty_expiry_date: r.treaty_expiry_date || null,
+      })
+      message.success('Reinsurer deactivated')
+      load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
   const inr = (v?: number) => v != null ? '₹' + Number(v).toLocaleString('en-IN') : '—'
   const cols = [
     { title: Titled('Code', 'reinsurer_code'), dataIndex: 'reinsurer_code', render: (v: string) => <Tag color="volcano" style={mono}>{v}</Tag> },
-    { title: Titled('Name', 'reinsurer_name'), dataIndex: 'reinsurer_name', render: (v: string, r: any) =>
-      <a onClick={() => openModal(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
-    { title: Titled('Retention Limit', 'retention_limit'), dataIndex: 'retention_limit', width: 140, render: inr },
-    { title: Titled('Products', 'product_codes'), dataIndex: 'product_codes', render: (v: string[]) => (v || []).map(p =>
-      <Tag key={p} style={{ marginRight: 4 }}>{p}</Tag>) },
+    { title: Titled('Name', 'reinsurer_name'), dataIndex: 'reinsurer_name' },
+    { title: Titled('Retention Limit', 'retention_limit'), dataIndex: 'retention_limit', width: 130, render: inr },
+    { title: Titled('Products', 'product_codes'), dataIndex: 'product_codes', render: (v: string[]) =>
+      (v || []).length ? (v || []).map(p => <Tag key={p} style={{ marginRight: 4 }}>{p}</Tag>) : <Tag>All</Tag> },
     { title: Titled('Treaty', 'treaty_code'), dataIndex: 'treaty_code', render: (v?: string) => v ? <span style={mono}>{v}</span> : '—' },
+    { title: Titled('Effective', 'treaty_effective_date'), dataIndex: 'treaty_effective_date', width: 105, render: (v?: string) => <span style={mono}>{v || '—'}</span> },
+    { title: Titled('Expires', 'treaty_expiry_date'), dataIndex: 'treaty_expiry_date', width: 105, render: (v?: string) => <span style={mono}>{v || '—'}</span> },
     { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: 'Actions', key: 'act', width: 150, render: (_: any, r: any) => (
+        <Space size={0}>
+          <Button size="small" type="link" onClick={() => openModal(r)}>Edit</Button>
+          <Popconfirm
+            title={`Deactivate ${r.reinsurer_code}?`}
+            description="Inactive reinsurers stop appearing as retention options."
+            okText="Deactivate" okButtonProps={{ danger: true }}
+            onConfirm={() => deactivate(r)} disabled={!r.is_active}
+          >
+            <Button size="small" type="link" danger disabled={!r.is_active}>Deactivate</Button>
+          </Popconfirm>
+        </Space>
+    ) },
   ]
   return (
     <div style={card}>
@@ -840,13 +912,22 @@ function RITab({ notify }: { notify: () => void }) {
             <Form.Item name="retention_limit" label="Retention Limit (INR)"><InputNumber style={{ width: '100%' }} /></Form.Item>
             <Form.Item name="currency" label="Currency"><Input /></Form.Item>
           </div>
-          <Form.Item name="product_codes" label="Products (codes) — leave empty for all">
-            <Select mode="tags" placeholder="e.g. IND-TERM-20" />
+          <Form.Item name="product_codes" label="Products — leave empty for all" tooltip="Products this treaty covers. Empty = all products.">
+            <Select mode="multiple" showSearch optionFilterProp="children" placeholder="Select products"
+              options={productOptions.map(p => ({ value: p.product_code, label: `${p.product_code} · ${p.product_name ?? ''}` }))} />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
             <Form.Item name="treaty_code" label="Treaty Code"><Input /></Form.Item>
             <Form.Item name="treaty_type" label="Treaty Type"><Input /></Form.Item>
           </div>
+          <Space style={{ width: '100%' }} wrap>
+            <Form.Item name="treaty_effective_date" label="Effective From" tooltip="Blank = applies immediately.">
+              <DatePicker style={{ width: 200 }} format="DD-MM-YYYY" />
+            </Form.Item>
+            <Form.Item name="treaty_expiry_date" label="Expires On" tooltip="Blank = no end date.">
+              <DatePicker style={{ width: 200 }} format="DD-MM-YYYY" />
+            </Form.Item>
+          </Space>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
             <Form.Item name="contact_name" label="Contact"><Input /></Form.Item>
             <Form.Item name="contact_email" label="Contact Email"><Input /></Form.Item>
