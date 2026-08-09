@@ -18,7 +18,6 @@ import {
 } from 'antd'
 import dayjs from 'dayjs'
 import { PlusOutlined, ReloadOutlined, MinusCircleOutlined } from '@ant-design/icons'
-import MedicalStandardsPage from './MedicalStandardsPage'
 import { Titled } from '../components/ColHint'
 import { sarConfigAPI, productsAPI } from '../api/client'
 
@@ -802,7 +801,6 @@ export default function SarConfigPage() {
     { key: 'aggregation', label: 'Aggregation', children: <AggregationTab notify={notify} /> },
     { key: 'fcl', label: 'FCL Config', children: <FclTab notify={notify} /> },
     { key: 'nml', label: 'NML Config', children: <NmlTab notify={notify} /> },
-    { key: 'medical-standards', label: 'Medical Standards', children: <MedicalStandardsPage embedded /> },
   ]
   return (
     <div style={{ padding: 20 }}>
