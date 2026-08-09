@@ -183,3 +183,54 @@ def test_benefit_options_drives_dropdown(client, auth_headers):
         finally:
             cur.close()
             release_conn(conn)
+
+
+def test_benefit_group_memberships_roundtrip(client, auth_headers):
+    """Benefit ↔ risk-group memberships persist and round-trip.
+
+    Saving with group_maps attaches the memberships and the benefit list
+    returns them; saving without group_maps supersedes the version and clears
+    them (so the UI no longer silently wipes an existing membership set).
+    """
+    RG = "RG-MAP-TST"
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM uw_benefit_group_map WHERE benefit_id IN "
+                    "(SELECT id FROM uw_benefit_master WHERE benefit_code = %s)", (CODE,))
+        cur.execute("DELETE FROM uw_benefit_master WHERE benefit_code = %s", (CODE,))
+        cur.execute("DELETE FROM uw_risk_group WHERE group_code = %s", (RG,))
+        conn.commit()
+    finally:
+        cur.close()
+        release_conn(conn)
+
+    try:
+        r = client.post("/sar-config/risk-groups", json={
+            "group_code": RG, "group_name": "Membership Map Test", "aggregation_method": "SUM",
+        }, headers=auth_headers)
+        assert r.status_code in (200, 201), r.text
+
+        # v1 with memberships
+        _save(client, auth_headers, group_maps=[
+            {"risk_group_code": RG, "weight_pct": 100, "priority": 5}])
+        lst = client.get("/sar-config/benefits", headers=auth_headers).json()
+        row = [b for b in lst if b["benefit_code"] == CODE][0]
+        assert row["group_maps"] == [
+            {"risk_group_code": RG, "weight_pct": 100, "priority": 5}], row["group_maps"]
+
+        # v2 without group_maps → supersedes and clears membership
+        _save(client, auth_headers, processing_sequence=9)
+        lst = client.get("/sar-config/benefits", headers=auth_headers).json()
+        row = [b for b in lst if b["benefit_code"] == CODE][0]
+        assert row["group_maps"] == [], row["group_maps"]
+    finally:
+        _cleanup()
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("DELETE FROM uw_risk_group WHERE group_code = %s", (RG,))
+            conn.commit()
+        finally:
+            cur.close()
+            release_conn(conn)

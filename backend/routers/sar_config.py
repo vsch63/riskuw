@@ -234,7 +234,26 @@ def list_benefits(current: CurrentUser = CurrentUser):
               AND (effective_date IS NULL OR effective_date <= CURRENT_DATE)
             ORDER BY processing_sequence, benefit_code, version DESC
         """, (current.tenant_id,))
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
+
+        # Attach risk-group memberships so the UI can render and edit them.
+        # A benefit may belong to several groups (weight split + priority).
+        cur.execute("""
+            SELECT bm.id::text AS benefit_id, rg.group_code AS risk_group_code,
+                   bgm.weight_pct, bgm.priority
+            FROM uw_benefit_group_map bgm
+            JOIN uw_benefit_master bm ON bm.id = bgm.benefit_id
+            JOIN uw_risk_group rg ON rg.id = bgm.risk_group_id
+            WHERE bm.tenant_id = %s::uuid AND bgm.is_active = true
+            ORDER BY bgm.priority, rg.group_code
+        """, (current.tenant_id,))
+        maps: dict[str, list[dict]] = {}
+        for m in cur.fetchall():
+            md = dict(m)
+            maps.setdefault(md.pop("benefit_id"), []).append(md)
+        for r in rows:
+            r["group_maps"] = maps.get(r["id"], [])
+        return rows
     finally:
         release(conn)
 

@@ -13,10 +13,10 @@
 // ══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from 'react'
 import {
-  Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm,
+  Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm, Divider,
   message, Tag, Space, Tabs, Card, Typography, Alert,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import MedicalStandardsPage from './MedicalStandardsPage'
 import { Titled } from '../components/ColHint'
 import { sarConfigAPI } from '../api/client'
@@ -58,6 +58,7 @@ function BenefitsTab({ notify }: { notify: () => void }) {
   const [editing, setEditing] = useState<any>(null)
   const [options, setOptions] = useState<any[]>([])
   const [optionsLoading, setOptionsLoading] = useState(true)
+  const [riskGroups, setRiskGroups] = useState<any[]>([])
   const [hist, setHist] = useState<{ code: string; versions: any[] } | null>(null)
   const [histLoading, setHistLoading] = useState(false)
   const [form] = Form.useForm()
@@ -81,7 +82,15 @@ function BenefitsTab({ notify }: { notify: () => void }) {
     } catch (e: any) { message.error(e.message) }
     finally { setOptionsLoading(false) }
   }
-  useEffect(() => { load(); loadOptions() }, [])
+
+  // Risk groups from the Risk Groups tab — the membership picker source.
+  const loadRiskGroups = async () => {
+    try {
+      const { data } = await sarConfigAPI.listRiskGroups()
+      setRiskGroups((data || []).filter((g: any) => g.is_active))
+    } catch (e: any) { message.error(e.message) }
+  }
+  useEffect(() => { load(); loadOptions(); loadRiskGroups() }, [])
 
   const openModal = (r?: any) => {
     setEditing(r || null)
@@ -125,6 +134,10 @@ function BenefitsTab({ notify }: { notify: () => void }) {
     { title: Titled('SAR Formula', 'sar_formula'), dataIndex: 'sar_formula', width: 150, render: (v: string) => <span style={mono}>{v || 'FACE_AMOUNT'}</span> },
     { title: Titled('Exposure Group', 'uw_exposure_group'), dataIndex: 'uw_exposure_group', width: 140 },
     { title: Titled('Risk Group', 'risk_group'), dataIndex: 'risk_group', width: 110 },
+    { title: Titled('Groups (w%)', 'group_maps'), dataIndex: 'group_maps', width: 180, render: (v: any[]) =>
+        <span>{v?.length ? v.map((m: any) =>
+          <Tag key={m.risk_group_code} color="geekblue" style={{ marginBottom: 2 }}>{m.risk_group_code} {Number(m.weight_pct)}%</Tag>
+        ) : <Tag>—</Tag>}</span> },
     { title: Titled('Payer', 'premium_payer'), dataIndex: 'premium_payer', width: 100 },
     { title: Titled('In SAR', 'include_in_sar'), dataIndex: 'include_in_sar', width: 70, render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>) },
     { title: Titled('Seq', 'processing_sequence'), dataIndex: 'processing_sequence', width: 60 },
@@ -154,7 +167,7 @@ function BenefitsTab({ notify }: { notify: () => void }) {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>New Benefit</Button>
       </Space>
       <Table size="small" rowKey="benefit_code" dataSource={rows} columns={cols} loading={loading} pagination={{ pageSize: 12 }} />
-      <Modal title={editing ? `Edit Benefit · ${editing.benefit_code}` : 'New Benefit'} open={open} onOk={save} onCancel={() => { setEditing(null); setOpen(false) }} width={620}>
+      <Modal title={editing ? `Edit Benefit · ${editing.benefit_code}` : 'New Benefit'} open={open} onOk={save} onCancel={() => { setEditing(null); setOpen(false) }} width={720}>
         <Form form={form} layout="vertical" initialValues={{ benefit_type: 'BASE', risk_type: 'MORTALITY', premium_payer: 'ANY', include_in_sar: true, sar_formula: 'FACE_AMOUNT', processing_sequence: 0, is_active: true }}>
           <Space style={{ width: '100%' }} wrap>
             <Form.Item name="benefit_code" label="Benefit / Product Code" rules={[{ required: true }]}
@@ -188,6 +201,39 @@ function BenefitsTab({ notify }: { notify: () => void }) {
             <Form.Item name="include_in_sar" label="Include in SAR" valuePropName="checked"><Switch /></Form.Item>
             <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
           </Space>
+
+          <Divider style={{ margin: '12px 0' }} />
+          <Form.Item
+            label="Risk Group Memberships"
+            style={{ marginBottom: 4 }}
+            tooltip="Which Risk Groups this benefit's SAR aggregates into, and the weight per group (0–100). Empty = falls back to the single Risk Group category above. A benefit can belong to several groups (e.g. 60% LIFE / 40% HEALTH)."
+          >
+            <Form.List name="group_maps">
+              {(fields, { add, remove }) => (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {fields.map(({ key, name, ...rest }) => (
+                    <Space key={key} align="baseline" wrap>
+                      <Form.Item {...rest} name={[name, 'risk_group_code']} rules={[{ required: true, message: 'Pick a risk group' }]} style={{ marginBottom: 0 }}>
+                        <Select style={{ width: 220 }} showSearch optionFilterProp="children" placeholder="Risk group"
+                          options={(riskGroups || []).map(g => ({ value: g.group_code, label: `${g.group_code} · ${g.aggregation_method}` }))} />
+                      </Form.Item>
+                      <Form.Item {...rest} name={[name, 'weight_pct']} style={{ marginBottom: 0 }}>
+                        <InputNumber style={{ width: 100 }} min={0} max={100} step={5} addonAfter="%" placeholder="Weight" />
+                      </Form.Item>
+                      <Form.Item {...rest} name={[name, 'priority']} style={{ marginBottom: 0 }}>
+                        <InputNumber style={{ width: 70 }} min={1} placeholder="Seq" />
+                      </Form.Item>
+                      <MinusCircleOutlined onClick={() => remove(name)} style={{ color: 'var(--red-300)' }} />
+                    </Space>
+                  ))}
+                  <Button type="dashed" size="small" icon={<PlusOutlined />} block
+                    onClick={() => add({ risk_group_code: riskGroups?.[0]?.group_code, weight_pct: 100, priority: 100 })}>
+                    Add risk group
+                  </Button>
+                </Space>
+              )}
+            </Form.List>
+          </Form.Item>
         </Form>
       </Modal>
       <Modal title={`Version history — ${hist?.code ?? ''}`} open={!!hist} onCancel={() => setHist(null)} footer={null} width={640}>
