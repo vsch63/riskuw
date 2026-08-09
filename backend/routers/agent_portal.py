@@ -137,9 +137,9 @@ def list_products_agent(current: CurrentUser):
             SELECT product_code, product_name, product_type, category,
                    min_age, max_age, min_face_amount, max_face_amount,
                    available_terms, description
-            FROM products WHERE is_active = true
+            FROM products WHERE is_active = true AND tenant_id = %s::uuid
             ORDER BY product_name
-        """)
+        """, (current.tenant_id,))
         return [dict(r) for r in cur.fetchall()]
     finally:
         release(conn)

@@ -149,9 +149,9 @@ def test_benefit_options_drives_dropdown(client, auth_headers):
         cur.execute("SELECT tenant_id FROM uw_user WHERE username = 'admin'")
         tenant_id = dict(cur.fetchone())["tenant_id"]
         cur.execute("""
-            INSERT INTO products (product_code, product_name, product_type, is_active)
-            VALUES (%s, 'Benefit Options Test Product', 'INDIVIDUAL_TERM', true)
-        """, (PROD,))
+            INSERT INTO products (tenant_id, product_code, product_name, product_type, is_active)
+            VALUES (%s::uuid, %s, 'Benefit Options Test Product', 'INDIVIDUAL_TERM', true)
+        """, (tenant_id, PROD))
         for code, active in ((RIDER, True), (DEAD, False)):
             cur.execute("""
                 INSERT INTO product_benefit_config

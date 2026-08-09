@@ -341,8 +341,9 @@ def evaluate(body: EvaluateRequest, current: FlexibleAuth):
             conn2.cursor_factory = psycopg2.extras.RealDictCursor
             cur2 = conn2.cursor()
             cur2.execute(
-                "SELECT stp_threshold, refer_threshold, decline_threshold FROM products WHERE product_code=%s",
-                (body.product_code,)
+                "SELECT stp_threshold, refer_threshold, decline_threshold FROM products "
+                "WHERE product_code=%s AND tenant_id=%s::uuid",
+                (body.product_code, current.tenant_id)
             )
             row2 = cur2.fetchone()
             thresh = dict(row2) if row2 else {}
@@ -633,9 +634,10 @@ def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
             """
             SELECT stp_threshold, refer_threshold, decline_threshold
             FROM product_decision_thresholds
-            WHERE product_code = %s ORDER BY created_at DESC LIMIT 1
+            WHERE product_code = %s AND tenant_id = %s::uuid
+            ORDER BY created_at DESC LIMIT 1
             """,
-            (body.product_code,),
+            (body.product_code, current.tenant_id),
         )
         row = cur.fetchone()
         if row:
@@ -643,8 +645,9 @@ def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
         else:
             # Fall back to product-level thresholds
             cur.execute(
-                "SELECT stp_threshold, refer_threshold, decline_threshold FROM products WHERE product_code=%s",
-                (body.product_code,),
+                "SELECT stp_threshold, refer_threshold, decline_threshold FROM products "
+                "WHERE product_code=%s AND tenant_id=%s::uuid",
+                (body.product_code, current.tenant_id),
             )
             row2 = cur.fetchone()
             thresholds = dict(row2) if row2 else {
@@ -665,7 +668,8 @@ def _fallback_evaluate(body: EvaluateRequest, current: CurrentUser) -> dict:
 
         # Age check
         cur2 = conn.cursor()
-        cur2.execute("SELECT min_age, max_age FROM products WHERE product_code=%s", (body.product_code,))
+        cur2.execute("SELECT min_age, max_age FROM products WHERE product_code=%s AND tenant_id=%s::uuid",
+                     (body.product_code, current.tenant_id))
         prod = cur2.fetchone()
         cur2.close()
         if prod:
@@ -1296,8 +1300,9 @@ def get_rider_config(base_product_code: str, current: CurrentUser):
             WHERE pbc.tenant_id = %s::uuid
               AND pbc.base_product_code = %s
               AND pbc.is_active = true
+              AND p.tenant_id = %s::uuid
             ORDER BY pbc.benefit_type
-        """, (current.tenant_id, base_product_code))
+        """, (current.tenant_id, base_product_code, current.tenant_id))
         rows = cur.fetchall()
         cur.close()
         result = []

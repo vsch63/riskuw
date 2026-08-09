@@ -129,8 +129,9 @@ def _run_eval(conn, payload: dict, tenant_id: str) -> dict:
     extra = payload.get("extra_debit_points", 0) or 0
     if extra > 0:
         cur = conn.cursor()
-        cur.execute("SELECT stp_threshold,refer_threshold,decline_threshold FROM products WHERE product_code=%s",
-                    (payload["product_code"],))
+        cur.execute("SELECT stp_threshold,refer_threshold,decline_threshold FROM products "
+                    "WHERE product_code=%s AND tenant_id=%s::uuid",
+                    (payload["product_code"], tenant_id))
         row = cur.fetchone(); cur.close()
         t = dict(row) if row else {}
         ndp = (result.get("net_debit_points") or 0) + extra

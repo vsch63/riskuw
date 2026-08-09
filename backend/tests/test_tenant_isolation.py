@@ -462,3 +462,58 @@ def test_member_upload_log_scoped(iso_tenants, client):
     b_refs = [r["upload_ref"] for r in rb.json()]
     assert f"TISO-UL-B-{suffix}" in b_refs, "Tenant B missing its own upload log"
     assert f"TISO-UL-A-{suffix}" not in b_refs, "Tenant B leaked Tenant A's upload log"
+
+
+# ── Product catalog isolation (V042) ─────────────────────────────────────────
+
+def test_product_catalog_tenant_isolated(iso_tenants, client):
+    """TC-TEN-010: the products catalog is tenant-owned (V042) — B can
+    neither list, fetch, update, nor write thresholds for A's product."""
+    ha = _login(client, ADMIN_A)
+    hb = _login(client, ADMIN_B)
+    code = f"PISO-{uuid.uuid4().hex[:4].upper()}"
+    body = {
+        "product_code": code,
+        "product_name": f"ISO Product {code}",
+        "product_type": "individual",
+        "min_age": 18,
+        "max_age": 65,
+        "min_face_amount": 100000,
+        "max_face_amount": 10000000,
+        "stp_threshold": 75,
+        "refer_threshold": 150,
+        "decline_threshold": 300,
+    }
+    try:
+        r = client.post("/products", headers=ha, json=body)
+        assert r.status_code in (200, 201), r.text
+
+        # B's list never surfaces A's product
+        codes = [p["product_code"] for p in client.get("/products", headers=hb).json()]
+        assert code not in codes, "Tenant B leaked Tenant A's product in list"
+
+        # B's fetch / update / thresholds writes are 404s, not 200s
+        assert client.get(f"/products/{code}", headers=hb).status_code == 404
+        assert client.patch(f"/products/{code}", headers=hb,
+                            json={"max_age": 70}).status_code == 404
+        assert client.put(f"/products/{code}/thresholds", headers=hb,
+                          json={"stp_threshold": 10, "refer_threshold": 20,
+                                "decline_threshold": 30}).status_code == 404
+
+        # B can't read A's sub-resources either
+        assert client.get(f"/products/{code}/rules", headers=hb).status_code == 404
+        assert client.get(f"/products/{code}/build-table", headers=hb).status_code == 404
+
+        # A still sees its own product and can fetch it
+        codes = [p["product_code"] for p in client.get("/products", headers=ha).json()]
+        assert code in codes, "Tenant A lost its own product"
+        assert client.get(f"/products/{code}", headers=ha).status_code == 200
+    finally:
+        conn = _db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM products WHERE product_code = %s", (code,))
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()

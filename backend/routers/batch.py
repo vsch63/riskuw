@@ -236,12 +236,19 @@ def _run_batch_job(job_id, file_bytes, filename, dry_run,
             release(conn)
 
 
-def _validate_product(cur, product_code: str) -> dict | None:
+def _validate_product(cur, product_code: str, tenant_id=None) -> dict | None:
     """Returns product row if valid and active, else None."""
-    cur.execute(
-        "SELECT product_code, product_name, is_active FROM products WHERE product_code = %s",
-        (product_code,)
-    )
+    if tenant_id:
+        cur.execute(
+            "SELECT product_code, product_name, is_active FROM products "
+            "WHERE product_code = %s AND tenant_id = %s::uuid",
+            (product_code, tenant_id)
+        )
+    else:
+        cur.execute(
+            "SELECT product_code, product_name, is_active FROM products WHERE product_code = %s",
+            (product_code,)
+        )
     row = cur.fetchone()
     if not row:
         return None
@@ -419,7 +426,11 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
         rows   = list(reader)
 
         # Cache valid products to avoid repeated DB hits
-        cur.execute("SELECT product_code FROM products WHERE is_active = true")
+        if tenant_id:
+            cur.execute("SELECT product_code FROM products WHERE is_active = true AND tenant_id = %s::uuid",
+                        (tenant_id,))
+        else:
+            cur.execute("SELECT product_code FROM products WHERE is_active = true")
         valid_products = {dict(r)["product_code"] for r in cur.fetchall()}
 
         approved = declined = referred = errored = 0
@@ -609,7 +620,7 @@ def _fallback_process(job_id, file_bytes, filename, dry_run,
                         payload[bool_field] = str(payload[bool_field]).lower() in ("true","1","yes")
 
                 if not dry_run:
-                    result = run_evaluation(payload, username, None)
+                    result = run_evaluation(payload, username, tenant_id)
                     outcome = result.get("outcome","ERROR")
                 else:
                     result  = {}

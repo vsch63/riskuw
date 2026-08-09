@@ -268,8 +268,9 @@ def list_benefit_options(current: CurrentUser = CurrentUser):
 
     A typed code can silently create a phantom benefit (a SAR row with no
     backing product), so the UI must present these instead of free text.
-    products has no canonical tenant_id (V001) — mirror list_products' unscoped
-    read rather than reference the dev-only column.
+    Both sides are tenant-scoped (V042): base plans are the caller's own
+    products; compatible riders come from product_benefit_config for the
+    caller's tenant.
     """
     conn, release = _get_db()
     try:
@@ -278,7 +279,7 @@ def list_benefit_options(current: CurrentUser = CurrentUser):
             """
             SELECT product_code AS benefit_code, product_name, 'BASE' AS benefit_type
             FROM products
-            WHERE is_active = true
+            WHERE is_active = true AND tenant_id = %s::uuid
             UNION
             SELECT pbc.rider_product_code, COALESCE(p.product_name, pbc.rider_product_code),
                    pbc.benefit_type
@@ -287,7 +288,7 @@ def list_benefit_options(current: CurrentUser = CurrentUser):
             WHERE pbc.tenant_id = %s::uuid AND pbc.is_active = true
             ORDER BY benefit_code
             """,
-            (current.tenant_id,),
+            (current.tenant_id, current.tenant_id),
         )
         rows = [dict(r) for r in cur.fetchall()]
         return rows

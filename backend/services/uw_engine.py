@@ -37,17 +37,26 @@ DEFAULT_REFER_THRESHOLD   = 150
 DEFAULT_DECLINE_THRESHOLD = 200
 
 
-def _get_thresholds(product_code: str) -> dict:
+def _get_thresholds(product_code: str, tenant_id=None) -> dict:
     try:
         from database import get_conn, release_conn
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT stp_threshold, refer_threshold, decline_threshold "
-            "FROM product_decision_thresholds "
-            "WHERE product_code=%s ORDER BY created_at DESC LIMIT 1",
-            (product_code,),
-        )
+        if tenant_id:
+            cur.execute(
+                "SELECT stp_threshold, refer_threshold, decline_threshold "
+                "FROM product_decision_thresholds "
+                "WHERE product_code=%s AND tenant_id=%s::uuid "
+                "ORDER BY created_at DESC LIMIT 1",
+                (product_code, tenant_id),
+            )
+        else:
+            cur.execute(
+                "SELECT stp_threshold, refer_threshold, decline_threshold "
+                "FROM product_decision_thresholds "
+                "WHERE product_code=%s ORDER BY created_at DESC LIMIT 1",
+                (product_code,),
+            )
         row = cur.fetchone()
         cur.close()
         release_conn(conn)
@@ -65,21 +74,33 @@ def _get_thresholds(product_code: str) -> dict:
     }
 
 
-def _get_product(product_code: str) -> dict:
+def _get_product(product_code: str, tenant_id=None) -> dict:
     # The live catalog table is `products` (routers/products.py, single-benefit
     # evaluation in underwriting.py). A previous copy read the legacy `product`
     # table which no code writes to, so product eligibility checks silently
     # fell back to defaults. Fixed to read the live table with its column names.
+    # Tenant-scoped (V042): when a tenant is present the lookup is restricted
+    # to that tenant's catalog; the tenant-less path is only hit by internal
+    # system evaluations that carry no tenant context.
     try:
         from database import get_conn, release_conn
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT min_age, max_age, min_face_amount AS min_face, "
-            "max_face_amount AS max_face, is_guaranteed_issue AS is_gi "
-            "FROM products WHERE product_code=%s AND is_active=true LIMIT 1",
-            (product_code,),
-        )
+        if tenant_id:
+            cur.execute(
+                "SELECT min_age, max_age, min_face_amount AS min_face, "
+                "max_face_amount AS max_face, is_guaranteed_issue AS is_gi "
+                "FROM products WHERE product_code=%s AND tenant_id=%s::uuid "
+                "AND is_active=true LIMIT 1",
+                (product_code, tenant_id),
+            )
+        else:
+            cur.execute(
+                "SELECT min_age, max_age, min_face_amount AS min_face, "
+                "max_face_amount AS max_face, is_guaranteed_issue AS is_gi "
+                "FROM products WHERE product_code=%s AND is_active=true LIMIT 1",
+                (product_code,),
+            )
         row = cur.fetchone()
         cur.close()
         release_conn(conn)
@@ -524,8 +545,8 @@ def run_evaluation(payload: dict, actor: str, tenant_id: str | None) -> dict:
     gender       = payload.get("gender", "MALE")
     applicant_ref= payload.get("applicant_ref", "APP")
 
-    thresholds = _get_thresholds(product_code)
-    product    = _get_product(product_code)
+    thresholds = _get_thresholds(product_code, tenant_id)
+    product    = _get_product(product_code, tenant_id)
 
     debits:  int = 0
     credits: int = 0

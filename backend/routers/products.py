@@ -43,6 +43,22 @@ def _join_terms(v):
     return v
 
 
+def _product_owned(conn, code: str, tenant_id) -> bool:
+    """True if a product with `code` belongs to `tenant_id`. Sub-resources
+    (rules / build-table / formula-labels) live in child tables without a
+    tenant column, so every one of those endpoints must guard on the parent
+    product's ownership before reading or writing."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT 1 FROM products WHERE product_code=%s AND tenant_id=%s::uuid",
+            (code, tenant_id),
+        )
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+
+
 def _log(conn, current, entity_type: str, entity_id: str, event_type: str,
          after: dict | None = None, before: dict | None = None) -> None:
     """Record a CONFIG change in the audit trail. Silent on failure."""
@@ -164,8 +180,9 @@ def list_products(current: CurrentUser):
                    reinsurance_threshold, max_issue_age,
                    effective_date, expire_date, description, created_at
             FROM products
+            WHERE tenant_id = %s::uuid
             ORDER BY product_code
-        """)
+        """, (current.tenant_id,))
         rows = cur.fetchall()
         cur.close()
         result = []
@@ -196,8 +213,8 @@ def get_product(code: str, current: CurrentUser):
                    stp_threshold, refer_threshold, decline_threshold,
                    is_guaranteed_issue, is_group_product, is_active,
                    description, uw_notes, effective_date, expire_date, created_at
-            FROM products WHERE product_code = %s
-        """, (code.upper(),))
+            FROM products WHERE product_code = %s AND tenant_id = %s::uuid
+        """, (code.upper(), current.tenant_id))
         row = cur.fetchone()
         cur.close()
         if not row:
@@ -225,7 +242,7 @@ def create_product(body: ProductCreate, current: CurrentUser):
             raise HTTPException(409, f"Product code '{body.product_code}' already exists")
         cur.execute("""
             INSERT INTO products (
-                product_code, product_name, product_type, category, uw_method,
+                tenant_id, product_code, product_name, product_type, category, uw_method,
                 min_age, max_age, min_face_amount, max_face_amount,
                 available_terms, benefit_terms, premium_terms,
                 exam_required, non_medical_limit, reinsurance_threshold, max_issue_age,
@@ -234,11 +251,11 @@ def create_product(body: ProductCreate, current: CurrentUser):
                 description, uw_notes, effective_date, expire_date,
                 created_at, updated_at
             ) VALUES (
-                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                %s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                 %s::date,%s::date,now(),now()
             ) RETURNING product_code, product_name, is_active
         """, (
-            body.product_code.upper(), body.product_name, body.product_type,
+            current.tenant_id, body.product_code.upper(), body.product_name, body.product_type,
             body.category, body.uw_method,
             body.min_age, body.max_age, body.min_face_amount, body.max_face_amount,
             _join_terms(body.available_terms), _join_terms(body.benefit_terms),
@@ -269,6 +286,8 @@ def get_product_formula_labels(code: str, current: CurrentUser):
     """Return user label fields required by this product's active premium formula."""
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         cur.execute(
             """
@@ -352,8 +371,9 @@ def update_product(code: str, body: ProductUpdate, current: CurrentUser):
 
         sets = ", ".join(set_parts)
         cur.execute(
-            f"UPDATE products SET {sets}, updated_at=now() WHERE product_code=%s RETURNING product_code",
-            (*values, code.upper())
+            f"UPDATE products SET {sets}, updated_at=now() "
+            "WHERE product_code=%s AND tenant_id=%s::uuid RETURNING product_code",
+            (*values, code.upper(), current.tenant_id)
         )
         row = cur.fetchone()
         conn.commit()
@@ -378,6 +398,8 @@ def update_product(code: str, body: ProductUpdate, current: CurrentUser):
 def get_rules(code: str, current: CurrentUser):
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         cur.execute("""
             SELECT rule_id, rule_name, category, default_debit, is_enabled,
@@ -413,6 +435,8 @@ def update_rule(code: str, rule_id: str, body: RuleUpdate, current: CurrentUser)
         raise HTTPException(403, "Admins only")
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO product_rules
@@ -451,9 +475,9 @@ def get_thresholds(code: str, current: CurrentUser):
                        max_table_rating, max_flat_extra,
                        effective_date, expiry_date
                 FROM product_decision_thresholds
-                WHERE product_code = %s
+                WHERE product_code = %s AND tenant_id = %s::uuid
                 ORDER BY created_at DESC LIMIT 1
-            """, (code.upper(),))
+            """, (code.upper(), current.tenant_id))
             row = cur.fetchone()
             if row:
                 cur.close()
@@ -475,8 +499,8 @@ def get_thresholds(code: str, current: CurrentUser):
         # Fallback to products table inline columns
         cur.execute("""
             SELECT stp_threshold, refer_threshold, decline_threshold
-            FROM products WHERE product_code = %s
-        """, (code.upper(),))
+            FROM products WHERE product_code = %s AND tenant_id = %s::uuid
+        """, (code.upper(), current.tenant_id))
         row2 = cur.fetchone()
         cur.close()
         if row2:
@@ -500,6 +524,8 @@ def save_thresholds(code: str, body: ThresholdUpdate, current: CurrentUser):
         raise HTTPException(400, "Must satisfy: STP < Refer < Decline")
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         # Try dedicated thresholds table first
         try:
@@ -548,12 +574,14 @@ def save_thresholds(code: str, body: ThresholdUpdate, current: CurrentUser):
         cur.execute("""
             UPDATE products
             SET stp_threshold=%s, refer_threshold=%s, decline_threshold=%s, updated_at=now()
-            WHERE product_code=%s
-        """, (body.stp_threshold, body.refer_threshold, body.decline_threshold, code.upper()))
+            WHERE product_code=%s AND tenant_id=%s::uuid
+        """, (body.stp_threshold, body.refer_threshold, body.decline_threshold, code.upper(), current.tenant_id))
 
         conn.commit()
         cur.close()
         return {"status": "saved", "product_code": code.upper()}
+    except HTTPException:
+        raise
     except Exception as e:
         conn.rollback()
         raise HTTPException(500, str(e))
@@ -567,6 +595,8 @@ def save_thresholds(code: str, body: ThresholdUpdate, current: CurrentUser):
 def get_build_table(code: str, current: CurrentUser):
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         cur.execute("""
             SELECT bmi_min, bmi_max, debit_points, is_decline, band_label
@@ -598,6 +628,8 @@ def add_build_band(code: str, body: BuildBand, current: CurrentUser):
         raise HTTPException(400, "BMI Min must be less than BMI Max")
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO product_build_table
@@ -621,6 +653,8 @@ def delete_build_band(code: str, body: DeleteBand, current: CurrentUser):
         raise HTTPException(403, "Admins only")
     conn, release = _get_db()
     try:
+        if not _product_owned(conn, code.upper(), current.tenant_id):
+            raise HTTPException(404, f"Product '{code}' not found")
         cur = conn.cursor()
         cur.execute(
             "DELETE FROM product_build_table WHERE product_code=%s AND bmi_min=%s AND bmi_max=%s",
