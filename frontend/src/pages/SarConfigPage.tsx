@@ -13,9 +13,10 @@
 // ══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from 'react'
 import {
-  Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm, Divider,
+  Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm, Divider, DatePicker,
   message, Tag, Space, Tabs, Card, Typography, Alert,
 } from 'antd'
+import dayjs from 'dayjs'
 import { PlusOutlined, ReloadOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import MedicalStandardsPage from './MedicalStandardsPage'
 import { Titled } from '../components/ColHint'
@@ -494,50 +495,148 @@ function FclTab({ notify }: { notify: () => void }) {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [exposureOptions, setExposureOptions] = useState<any[]>([])
+  const [productOptions, setProductOptions] = useState<any[]>([])
   const [form] = Form.useForm()
+
   const load = async () => {
     setLoading(true)
     try { const { data } = await sarConfigAPI.listFcl(); setRows(data || []) }
     catch (e: any) { message.error(e.message) } finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
-  const save = async () => {
+
+  // Dropdown sources: active products (Product Config) + exposure groups.
+  const loadDropdowns = async () => {
     try {
-      await sarConfigAPI.upsertFcl(await form.validateFields())
-      message.success('FCL rule saved'); setOpen(false); form.resetFields(); load(); notify()
+      const [eg, pr] = await Promise.all([sarConfigAPI.listExposureGroups(), productsAPI.list()])
+      setExposureOptions((eg.data || []).filter((e: any) => e.is_active))
+      setProductOptions((pr.data || []).filter((p: any) => p.is_active))
     } catch (e: any) { message.error(e.message) }
   }
+  useEffect(() => { load(); loadDropdowns() }, [])
+
+  const openModal = (r?: any) => {
+    setEditing(r || null)
+    form.resetFields()
+    if (r) form.setFieldsValue({
+      product_code: r.product_code,
+      scheme_id: r.scheme_id || undefined,
+      exposure_group: r.exposure_group || ANY,
+      fcl_basis: r.fcl_basis,
+      flat_fcl_amount: r.flat_fcl_amount,
+      formula_id: r.formula_id,
+      apply_fcl_per_benefit: r.apply_fcl_per_benefit,
+      premium_payer_filter: r.premium_payer_filter,
+      is_active: r.is_active,
+      effective_date: r.effective_date ? dayjs(r.effective_date) : null,
+      expiry_date: r.expiry_date ? dayjs(r.expiry_date) : null,
+    })
+    setOpen(true)
+  }
+
+  const save = async () => {
+    const v = await form.validateFields()
+    // Blank exposure → omit so the backend stores NULL (= product-level).
+    if (v.exposure_group === ANY) delete v.exposure_group
+    const body = {
+      ...v,
+      effective_date: v.effective_date ? v.effective_date.format('YYYY-MM-DD') : null,
+      expiry_date: v.expiry_date ? v.expiry_date.format('YYYY-MM-DD') : null,
+    }
+    try {
+      await sarConfigAPI.upsertFcl(body)
+      message.success(editing ? 'FCL rule updated — new version created' : 'FCL rule created')
+      setOpen(false); setEditing(null); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
+  // Soft delete: new is_active=false version supersedes the active one.
+  const deactivate = async (r: any) => {
+    try {
+      await sarConfigAPI.upsertFcl({
+        product_code: r.product_code,
+        scheme_id: r.scheme_id || undefined,
+        exposure_group: r.exposure_group || undefined,
+        fcl_basis: r.fcl_basis,
+        flat_fcl_amount: r.flat_fcl_amount,
+        formula_id: r.formula_id,
+        apply_fcl_per_benefit: r.apply_fcl_per_benefit,
+        premium_payer_filter: r.premium_payer_filter,
+        is_active: false,
+      })
+      message.success('FCL rule deactivated — new inactive version created')
+      load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
   const cols = [
-    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', render: (v: string) => <span style={mono}>{v}</span> },
+    { title: Titled('Product', 'product_code'), dataIndex: 'product_code', width: 130, render: (v: string) => <span style={mono}>{v}</span> },
     { title: Titled('Ver', 'version'), dataIndex: 'version', width: 60, render: (v: number) => <Tag color="cyan">v{v}</Tag> },
-    { title: Titled('Scheme', 'scheme_id'), dataIndex: 'scheme_id', render: (v?: string) => v || <Tag>Any</Tag> },
-    { title: Titled('Exposure', 'exposure_group'), dataIndex: 'exposure_group', render: (v?: string) => v || <Tag>Product</Tag> },
+    { title: Titled('Scheme', 'scheme_id'), dataIndex: 'scheme_id', width: 90, render: (v?: string) => v || <Tag>Any</Tag> },
+    { title: Titled('Exposure', 'exposure_group'), dataIndex: 'exposure_group', width: 130, render: (v?: string) => v || <Tag>Product</Tag> },
     { title: Titled('Basis', 'fcl_basis'), dataIndex: 'fcl_basis', width: 90, render: (v: string) => <Tag color={v === 'FORMULA' ? 'purple' : 'blue'}>{v}</Tag> },
-    { title: Titled('Flat FCL', 'flat_fcl_amount'), dataIndex: 'flat_fcl_amount', render: (v?: number) => (v != null ? v.toLocaleString('en-IN') : '—') },
+    { title: Titled('Flat FCL', 'flat_fcl_amount'), dataIndex: 'flat_fcl_amount', width: 100, render: (v?: number) => (v != null ? Number(v).toLocaleString('en-IN') : '—') },
+    { title: Titled('Effective', 'effective_date'), dataIndex: 'effective_date', width: 105, render: (v?: string) => <span style={mono}>{v || 'today'}</span> },
+    { title: Titled('Expires', 'expiry_date'), dataIndex: 'expiry_date', width: 105, render: (v?: string) => <span style={mono}>{v || '—'}</span> },
     { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
+    { title: 'Actions', key: 'act', width: 150, render: (_: any, r: any) => (
+        <Space size={0}>
+          <Button size="small" type="link" onClick={() => openModal(r)}>Edit</Button>
+          <Popconfirm
+            title={`Deactivate this FCL rule?`}
+            description="New inactive version — the rule stops applying."
+            okText="Deactivate" okButtonProps={{ danger: true }}
+            onConfirm={() => deactivate(r)} disabled={!r.is_active}
+          >
+            <Button size="small" type="link" danger disabled={!r.is_active}>Deactivate</Button>
+          </Popconfirm>
+        </Space>
+    ) },
   ]
+
   return (
     <div style={card}>
-      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>New FCL Rule</Button>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={() => openModal()}>New FCL Rule</Button>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="FORMULA-based FCLs are built in the Formula Engine tab (formula_type = FCL). Paste the formula ID here, or use FLAT for a fixed Free Cover Limit." />
+        message="FORMULA-based FCLs are built in the Formula Engine tab (formula_type = FCL). Pick the formula from the list, or use FLAT for a fixed Free Cover Limit." />
       <Table size="small" rowKey={(r) => r.id} dataSource={rows} columns={cols} loading={loading} pagination={false} />
-      <Modal title="Free Cover Limit Rule" open={open} onOk={save} onCancel={() => setOpen(false)} width={540} destroyOnClose>
+      <Modal title={editing ? `Edit FCL Rule · ${editing.product_code}` : 'New FCL Rule'}
+        open={open} onOk={save} onCancel={() => { setEditing(null); setOpen(false) }} width={560}>
         <Form form={form} layout="vertical" initialValues={{ fcl_basis: 'FLAT', apply_fcl_per_benefit: false, premium_payer_filter: 'ANY', is_active: true }}>
-          <Form.Item name="product_code" label="Product Code" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="scheme_id" label="Scheme ID (blank = all schemes)"><Input /></Form.Item>
-          <Form.Item name="exposure_group" label="Exposure Group (blank = product-level)"><Select allowClear>
-            {['EMPLOYER_BASE', 'VOLUNTARY_TOPUP', 'INDIVIDUAL', 'FREE_COVER', 'EXCESS_COVER', 'OPTIONAL_RIDER'].map(t => <Option key={t} value={t}>{t}</Option>)}
-          </Select></Form.Item>
+          <Form.Item name="product_code" label="Product Code" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="children" disabled={!!editing} placeholder="Select product"
+              options={productOptions.map(p => ({ value: p.product_code, label: `${p.product_code} · ${p.product_name ?? ''}` }))} />
+          </Form.Item>
+          <Form.Item name="scheme_id" label="Scheme ID" tooltip="Blank = applies to all schemes."><Input placeholder="Blank = all schemes" /></Form.Item>
+          <Form.Item name="exposure_group" label="Exposure Group" tooltip="— Product level (blank) — applies the rule at product level across all exposure groups.">
+            <Select showSearch optionFilterProp="children" disabled={!!editing}
+              options={[
+                { value: ANY, label: '— Product level (blank) —' },
+                ...exposureOptions.map(e => ({ value: e.exposure_code, label: `${e.exposure_code} · ${e.exposure_name ?? ''}` })),
+              ]} />
+          </Form.Item>
           <Form.Item name="fcl_basis" label="Basis"><Select>{FCL_BASIS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
           <Form.Item noStyle shouldUpdate={(p, n) => p.fcl_basis !== n.fcl_basis}>
             {({ getFieldValue }) => getFieldValue('fcl_basis') === 'FLAT' ? (
               <Form.Item name="flat_fcl_amount" label="Flat FCL Amount" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} /></Form.Item>
             ) : (
-              <Form.Item name="formula_id" label="FCL Formula ID (from Formula Engine)" rules={[{ required: true }]}><Input /></Form.Item>
+              <Form.Item name="formula_id" label="FCL Formula ID (from Formula Engine)" rules={[{ required: true }]}><Input placeholder="Paste formula ID" /></Form.Item>
             )}
           </Form.Item>
-          <Form.Item name="premium_payer_filter" label="Premium Payer Filter"><Select>{PAYERS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+          <Space style={{ width: '100%' }} wrap>
+            <Form.Item name="premium_payer_filter" label="Premium Payer Filter"><Select style={{ width: 180 }}>{PAYERS.map(t => <Option key={t} value={t}>{t}</Option>)}</Select></Form.Item>
+            <Form.Item name="apply_fcl_per_benefit" label="Apply FCL per benefit" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
+          </Space>
+          <Space style={{ width: '100%' }} wrap>
+            <Form.Item name="effective_date" label="Effective From" tooltip="Blank = applies immediately. Future date = scheduled — the previous rule stays active until this takes effect.">
+              <DatePicker style={{ width: 200 }} format="DD-MM-YYYY" />
+            </Form.Item>
+            <Form.Item name="expiry_date" label="Expires On" tooltip="Blank = no end date.">
+              <DatePicker style={{ width: 200 }} format="DD-MM-YYYY" />
+            </Form.Item>
+          </Space>
         </Form>
       </Modal>
     </div>
