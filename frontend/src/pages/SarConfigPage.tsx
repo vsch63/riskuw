@@ -785,79 +785,9 @@ function NmlTab({ notify }: { notify: () => void }) {
   )
 }
 
-// ─────────────────────────── RI Retention (Phase 4) ─────────────
-function RITab({ notify }: { notify: () => void }) {
-  const [rows, setRows] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<any>(null)
-  const [form] = Form.useForm()
-  const load = async () => {
-    setLoading(true)
-    try { const { data } = await sarConfigAPI.listRI(); setRows(data || []) }
-    catch (e: any) { message.error(e.message) } finally { setLoading(false) }
-  }
-  useEffect(() => { load() }, [])
-  const openModal = (r?: any) => {
-    setEditing(r || null)
-    form.resetFields()
-    if (r) form.setFieldsValue(r)
-    setOpen(true)
-  }
-  const save = async () => {
-    try {
-      await sarConfigAPI.upsertRI(await form.validateFields())
-      message.success('Reinsurer saved'); setOpen(false); form.resetFields(); load(); notify()
-    } catch (e: any) { message.error(e.message) }
-  }
-  const inr = (v?: number) => v != null ? '₹' + Number(v).toLocaleString('en-IN') : '—'
-  const cols = [
-    { title: Titled('Code', 'reinsurer_code'), dataIndex: 'reinsurer_code', render: (v: string) => <Tag color="volcano" style={mono}>{v}</Tag> },
-    { title: Titled('Name', 'reinsurer_name'), dataIndex: 'reinsurer_name', render: (v: string, r: any) =>
-      <a onClick={() => openModal(r)} style={{ color: 'var(--teal-300)' }}>{v}</a> },
-    { title: Titled('Retention Limit', 'retention_limit'), dataIndex: 'retention_limit', width: 140, render: inr },
-    { title: Titled('Products', 'product_codes'), dataIndex: 'product_codes', render: (v: string[]) => (v || []).map(p =>
-      <Tag key={p} style={{ marginRight: 4 }}>{p}</Tag>) },
-    { title: Titled('Treaty', 'treaty_code'), dataIndex: 'treaty_code', render: (v?: string) => v ? <span style={mono}>{v}</span> : '—' },
-    { title: Titled('Active', 'is_active'), dataIndex: 'is_active', width: 70, render: (v: boolean) => (v ? <Tag color="green">✓</Tag> : <Tag color="red">✗</Tag>) },
-  ]
-  return (
-    <div style={card}>
-      <div style={{ marginBottom: 8 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>New Reinsurer</Button>
-        <span style={{ fontSize: 11, color: 'var(--slate-500)', marginLeft: 12 }}>
-          Retention limit = net amount at risk (excess SAR after FCL) above which reinsurer approval is required (SAR engine step 10).
-        </span>
-      </div>
-      <Table size="small" rowKey="id" dataSource={rows} columns={cols} loading={loading} pagination={false} />
-      <Modal title={editing ? `Edit Reinsurer · ${editing.reinsurer_code}` : 'New Reinsurer'} open={open} onOk={save} onCancel={() => setOpen(false)} width={600} destroyOnClose>
-        <Form form={form} layout="vertical" initialValues={{ treaty_type: 'FACULTATIVE', currency: 'INR', is_active: true }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
-            <Form.Item name="reinsurer_code" label="Reinsurer Code" rules={[{ required: true }]}><Input disabled={!!editing} /></Form.Item>
-            <Form.Item name="reinsurer_name" label="Reinsurer Name" rules={[{ required: true }]}><Input /></Form.Item>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
-            <Form.Item name="retention_limit" label="Retention Limit (INR)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-            <Form.Item name="currency" label="Currency"><Input /></Form.Item>
-          </div>
-          <Form.Item name="product_codes" label="Products (codes) — leave empty for all">
-            <Select mode="tags" placeholder="e.g. IND-TERM-20" />
-          </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
-            <Form.Item name="treaty_code" label="Treaty Code"><Input /></Form.Item>
-            <Form.Item name="treaty_type" label="Treaty Type"><Input /></Form.Item>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
-            <Form.Item name="contact_name" label="Contact"><Input /></Form.Item>
-            <Form.Item name="contact_email" label="Contact Email"><Input /></Form.Item>
-          </div>
-          <Form.Item name="notes" label="Notes"><Input.TextArea rows={2} /></Form.Item>
-          <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
-        </Form>
-      </Modal>
-    </div>
-  )
-}
+// Reinsurer management lives in the Reinsurance module (single source of
+// truth for ri_reinsurer). SAR Config does not duplicate it — the SAR engine
+// reads ri_reinsurer directly.
 
 // ─────────────────────────── Page ────────────────────────────────
 export default function SarConfigPage() {
@@ -872,7 +802,6 @@ export default function SarConfigPage() {
     { key: 'aggregation', label: 'Aggregation', children: <AggregationTab notify={notify} /> },
     { key: 'fcl', label: 'FCL Config', children: <FclTab notify={notify} /> },
     { key: 'nml', label: 'NML Config', children: <NmlTab notify={notify} /> },
-    { key: 'ri', label: 'RI Retention', children: <RITab notify={notify} /> },
     { key: 'medical-standards', label: 'Medical Standards', children: <MedicalStandardsPage embedded /> },
   ]
   return (

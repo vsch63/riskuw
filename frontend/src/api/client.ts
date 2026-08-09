@@ -120,8 +120,6 @@ export const sarConfigAPI = {
   upsertFcl: (payload: object) => api.post('/sar-config/fcl', payload),
   listNml: () => api.get('/sar-config/nml'),
   upsertNml: (payload: object) => api.post('/sar-config/nml', payload),
-  listRI: () => api.get('/sar-config/ri'),
-  upsertRI: (payload: object) => api.post('/sar-config/ri', payload),
 }
 
 // ─── In-app notifications (Phase 3d) ─────────────────────────────
