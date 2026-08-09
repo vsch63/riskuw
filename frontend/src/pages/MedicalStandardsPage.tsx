@@ -55,13 +55,23 @@ type Standard = {
   rules: RuleRow[]
 }
 
+// Header fields held while the editor modal is open — either an existing
+// standard (isNew=false, code locked) or a brand-new one (isNew=true).
+type StandardDraft = {
+  code: string
+  family: string
+  name: string
+  category: string
+  isNew: boolean
+}
+
 const uid = () => Math.random().toString(36).slice(2, 9)
 
 export default function MedicalStandardsPage({ embedded = false }: { embedded?: boolean }) {
   const [standards, setStandards] = useState<Standard[]>([])
   const [loading, setLoading] = useState(false)
   const [productScope, setProductScope] = useState<string>('')
-  const [editing, setEditing] = useState<Standard | null>(null)
+  const [draft, setDraft] = useState<StandardDraft | null>(null)
   const [rules, setRules] = useState<RuleRow[]>([])
   const [saveScope, setSaveScope] = useState<string>('')
   const [saving, setSaving] = useState(false)
@@ -80,8 +90,14 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
 
   useEffect(() => { load() }, [load])
 
+  const openAdd = () => {
+    setDraft({ code: '', family: '', name: '', category: 'BUILD', isNew: true })
+    setSaveScope(productScope || '')
+    setRules([])
+  }
+
   const openEdit = (s: Standard) => {
-    setEditing(s)
+    setDraft({ code: s.code, family: s.family, name: s.name, category: s.category, isNew: false })
     setSaveScope(productScope || '')
     setRules((s.rules || []).map((r) => ({
       key: uid(), rule_type: r.rule_type, param: r.param, name: r.name,
@@ -114,11 +130,16 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
       ? { ...r, ranges: r.ranges.filter((b) => b.key !== rangeKey) } : r))
 
   const save = async () => {
-    if (!editing) return
+    if (!draft) return
     setSaving(true)
     try {
+      if (!draft.code.trim()) {
+        message.error('A standard code is required (e.g. R085)')
+        setSaving(false)
+        return
+      }
       const payload = {
-        family: editing.family, name: editing.name, category: editing.category,
+        family: draft.family, name: draft.name, category: draft.category,
         product_code: saveScope || null,
         rules: rules.map((r) => ({
           rule_type: r.rule_type,
@@ -137,9 +158,10 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
             : [],
         })),
       }
-      const r = await medicalStandardsAPI.upsert(editing.code, payload)
-      message.success(`Standard ${editing.code} saved`)
-      setEditing(null)
+      const code = draft.code.trim().toUpperCase()
+      const r = await medicalStandardsAPI.upsert(code, payload)
+      message.success(`Standard ${code} ${draft.isNew ? 'created' : 'saved'}`)
+      setDraft(null)
       load()
     } catch (e: any) {
       message.error(e?.response?.data?.detail || e?.message || 'Save failed')
@@ -181,6 +203,7 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
               onSearch={(q) => setProductScope(q)}
             />
             <Button icon={<ReloadOutlined />} onClick={load}>Reload</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>New Standard</Button>
           </Space>
         </Space>
       </Card>
@@ -199,11 +222,33 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
       </Card>
 
       <Modal
-        title={editing ? `Edit ${editing.code} — ${editing.name}` : ''}
-        open={!!editing} onOk={save} onCancel={() => setEditing(null)}
-        okText="Save" confirmLoading={saving} width={860} destroyOnClose
+        title={draft ? (draft.isNew ? 'New Standard' : `Edit ${draft.code} — ${draft.name}`) : ''}
+        open={!!draft} onOk={save} onCancel={() => setDraft(null)}
+        okText={draft?.isNew ? 'Create' : 'Save'} confirmLoading={saving} width={860} destroyOnClose
       >
         <Space direction="vertical" style={{ width: '100%' }}>
+          <Space wrap>
+            <div style={{ width: 110 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>Code</Text>
+              <Input style={mono} value={draft?.code} disabled={!draft?.isNew}
+                     placeholder="R085" onChange={(e) => setDraft((d) => d && ({ ...d, code: e.target.value }))} />
+            </div>
+            <div style={{ width: 160 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>Family</Text>
+              <Input value={draft?.family} placeholder="e.g. Build"
+                     onChange={(e) => setDraft((d) => d && ({ ...d, family: e.target.value }))} />
+            </div>
+            <div style={{ width: 240 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>Name</Text>
+              <Input value={draft?.name} placeholder="e.g. Body mass index"
+                     onChange={(e) => setDraft((d) => d && ({ ...d, name: e.target.value }))} />
+            </div>
+            <div style={{ width: 120 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>Category</Text>
+              <Input value={draft?.category} placeholder="BUILD"
+                     onChange={(e) => setDraft((d) => d && ({ ...d, category: e.target.value }))} />
+            </div>
+          </Space>
           <Space wrap>
             <Text type="secondary">Product override (optional):</Text>
             <Input value={saveScope} onChange={(e) => setSaveScope(e.target.value)}

@@ -135,7 +135,7 @@ export const notificationsAPI = {
 // ─── Medical Standards (data-driven UW catalogue, V034) ──────────
 export const medicalStandardsAPI = {
   list: (productCode?: string) =>
-    api.get('/medical-standards', { params: productCode ? { product_code: productCode } : {} }),
+    api.get('/medical-standards/list', { params: productCode ? { product_code: productCode } : {} }),
   get: (code: string, productCode?: string) =>
     api.get(`/medical-standards/${code}`, { params: productCode ? { product_code: productCode } : {} }),
   upsert: (code: string, payload: object) => api.put(`/medical-standards/${code}`, payload),

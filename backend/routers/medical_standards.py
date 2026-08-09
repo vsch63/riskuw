@@ -7,9 +7,15 @@ Admin API for the data-driven underwriting standards (Phase 2, V034):
   uw_medical_standard_rule   — FLAT (condition → fixed points) or RANGE (param)
   uw_medical_standard_range  — point bands for RANGE rules
 
-GET  /medical-standards            effective standards (system + product override)
+GET  /medical-standards/list       effective standards (system + product override)
+GET  /medical-standards/{code}     get one standard
 PUT  /medical-standards/{code}     upsert one standard scope (rules+ranges replaced)
 DELETE /medical-standards/{code}   drop one standard scope
+
+NOTE: the list lives at /medical-standards/list (not /medical-standards) because
+the bare path is claimed by the SPA route in nginx (App.tsx renders
+MedicalStandardsPage at "/medical-standards" for hard-refresh support). Keeping
+the API list on its own sub-path avoids the SPA/API collision.
 
 Writes are tenant-scoped (CurrentUser.tenant_id) and audited as CONFIG events so
 every tuning decision is attributable.
@@ -114,10 +120,14 @@ def _effective_standards(tenant_id, product_code) -> list[dict]:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.get("")
+@router.get("/list")
 def list_standards(current: CurrentUser, product_code: str | None = None):
     """Effective standards for the caller's tenant + optional product.
-    When no product is given, system-level standards apply."""
+    When no product is given, system-level standards apply.
+
+    Mounted at /medical-standards/list (NOT /medical-standards) — the bare
+    path is claimed by the SPA route in nginx so a hard refresh of the
+    /medical-standards page loads index.html instead of proxying."""
     return _effective_standards(current.tenant_id, product_code)
 
 

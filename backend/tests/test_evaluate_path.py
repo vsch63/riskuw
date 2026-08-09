@@ -374,7 +374,7 @@ def test_medical_standard_seed_is_complete(client, auth_headers):
     """The V034 system seed must contain all R001–R080 families with their
     rules/bands. A malformed INSERT silently drops a standard's rules and
     breaks evaluations for that family — this locks the seed shape in."""
-    resp = _api(client, auth_headers, "get", "/medical-standards")
+    resp = _api(client, auth_headers, "get", "/medical-standards/list")
     assert resp.status_code == 200, resp.text
     standards = {s["code"]: s for s in resp.json()}
 
