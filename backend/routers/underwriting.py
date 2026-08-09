@@ -397,6 +397,7 @@ def evaluate(body: EvaluateRequest, current: FlexibleAuth):
                     applicant_ref=body.applicant_ref,
                     risk_class=result.get("risk_class"),
                     premium=result.get("approved_premium"),
+                    tenant_id=current.tenant_id if current else "00000000-0000-0000-0000-000000000001",
                 )
         release_conn(_conn)
     except Exception as _email_err:
@@ -854,8 +855,8 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
             INSERT INTO policy_admin_queue
                 (applicant_ref, product_code, face_amount, age, gender, state,
                  outcome, risk_class, net_debit_points, approved_premium,
-                 premium_mode, decision_date, source, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ONLINE', 'UNPROCESSED')
+                 premium_mode, decision_date, source, status, tenant_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ONLINE', 'UNPROCESSED', %s)
             RETURNING id
             """,
             (
@@ -865,6 +866,7 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                 result.get("net_debit_points", 0),
                 result.get("approved_premium"),
                 getattr(body, "premium_mode", "ANNUAL") or "ANNUAL",
+                current.tenant_id,
             ),
         )
         row      = cur.fetchone()
@@ -951,6 +953,7 @@ def _persist_to_queue(body: EvaluateRequest, result: dict, current: CurrentUser)
                                 premium=result.get("approved_premium"),
                                 risk_class=result.get("risk_class"),
                                 premium_detail=result.get("premium_detail"),
+                                tenant_id=current.tenant_id if current else "00000000-0000-0000-0000-000000000001",
                             )
                     else:
                         from services.notification import log_missing_email_warning
@@ -1026,6 +1029,7 @@ def dashboard_stats(current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
         cur.execute("""
             SELECT
                 COUNT(*)                                              AS total,
@@ -1035,14 +1039,14 @@ def dashboard_stats(current: CurrentUser):
                 COUNT(*) FILTER (WHERE outcome ILIKE '%%ERROR%%'
                                    OR outcome = 'PRODUCT_NOT_FOUND')  AS errored
             FROM (
-                SELECT outcome, status FROM policy_admin_queue
+                SELECT outcome, status FROM policy_admin_queue WHERE tenant_id = %s
 
                 UNION ALL
 
-                SELECT outcome, status FROM batch_job_records
+                SELECT outcome, status FROM batch_job_records WHERE tenant_id = %s
             ) combined
             WHERE status NOT IN ('DRY_RUN', 'ERROR')
-        """)
+        """, (tenant_id, tenant_id))
         row = cur.fetchone()
         cur.close()
         d = dict(row) if row else {

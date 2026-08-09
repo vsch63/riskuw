@@ -117,12 +117,14 @@ def upload_history(current: CurrentUser):
     conn, release = _db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
         cur.execute("""
             SELECT upload_ref, filename, total_rows, inserted, updated,
                    skipped, errors, uploaded_by, uploaded_at, notes
             FROM member_upload_log
+            WHERE tenant_id = %s
             ORDER BY uploaded_at DESC LIMIT 50
-        """)
+        """, (tenant_id,))
         rows = cur.fetchall()
         result = []
         for r in rows:
@@ -266,13 +268,14 @@ async def upload_members(
     log_conn, log_release = _db()
     try:
         cur = log_conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
         cur.execute("""
             INSERT INTO member_upload_log
                 (upload_ref, filename, total_rows, inserted, updated,
-                 skipped, errors, uploaded_by, notes)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 skipped, errors, uploaded_by, notes, tenant_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (upload_ref, filename, len(rows), inserted, updated,
-              skipped, errors, current.username, notes))
+              skipped, errors, current.username, notes, tenant_id))
         log_conn.commit()
         cur.close()
     finally:

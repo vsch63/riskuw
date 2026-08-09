@@ -20,6 +20,37 @@ PREFIX = f"NOTIF-{uuid.uuid4().hex[:6]}"
 OWNER = "notif_owner"
 
 
+def _ensure_owner_user():
+    """Ensure the OWNER test user exists with a tenant_id."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT tenant_id FROM uw_user WHERE username = %s", (OWNER,))
+        row = cur.fetchone()
+        if row:
+            return row["tenant_id"] if hasattr(row, "keys") else row[0]
+        # Create the user in the CITEST tenant (same as admin)
+        cur.execute("SELECT tenant_id FROM uw_user WHERE username = 'admin'")
+        row = cur.fetchone()
+        admin_tenant = row["tenant_id"] if hasattr(row, "keys") else row[0]
+
+        import bcrypt
+        cur.execute("""
+            INSERT INTO uw_user (id, username, email, hashed_password, full_name,
+                                 role, is_active, is_deleted, tenant_id,
+                                 created_by, updated_by, version)
+            VALUES (%s, %s, %s, %s, 'Notif Owner', 'underwriter', true, false, %s,
+                    'system', 'system', 1)
+        """, (str(uuid.uuid4()), OWNER, f"{OWNER}@test.local",
+               bcrypt.hashpw(b"TestPass123!", bcrypt.gensalt(rounds=12)).decode(),
+               admin_tenant))
+        conn.commit()
+        return admin_tenant
+    finally:
+        cur.close()
+        release_conn(conn)
+
+
 def _cleanup():
     conn = get_conn()
     cur = conn.cursor()
@@ -52,14 +83,26 @@ def _seed_case(*, assigned_to: str | None = None, overdue: bool = False) -> int:
     conn = get_conn()
     cur = conn.cursor()
     try:
+        # Ensure OWNER user exists if we're assigning to them
+        if assigned_to == OWNER:
+            _ensure_owner_user()
+
+        # Get the tenant_id for the assigned_to user (or demo tenant if not specified)
+        if assigned_to:
+            cur.execute("SELECT tenant_id FROM uw_user WHERE username = %s", (assigned_to,))
+            row = cur.fetchone()
+            tenant_id = row["tenant_id"] if hasattr(row, "keys") else row[0]
+        else:
+            tenant_id = '00000000-0000-0000-0000-000000000001'
+
         cur.execute("""
             INSERT INTO policy_admin_queue
                 (applicant_ref, applicant_name, product_code, face_amount, age, gender,
-                 outcome, risk_class, net_debit_points, decision_date)
+                 outcome, risk_class, net_debit_points, decision_date, tenant_id)
             VALUES (%s, 'Notif Test Applicant', 'TST', 1000000, 35, 'M',
-                    'REFERRED', 'STANDARD', 25, now())
+                    'REFERRED', 'STANDARD', 25, now(), %s)
             RETURNING id
-        """, (f"{PREFIX}-{uuid.uuid4().hex[:4]}",))
+        """, (f"{PREFIX}-{uuid.uuid4().hex[:4]}", tenant_id))
         row = cur.fetchone()
         cid = row["id"] if hasattr(row, "keys") else row[0]
         if assigned_to is not None:

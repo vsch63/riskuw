@@ -41,8 +41,9 @@ def list_queue(
     conn, release = _get_db()
     try:
         cur = conn.cursor()
-        where = "WHERE 1=1"
-        params: list = []
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
+        where = "WHERE tenant_id = %s"
+        params: list = [tenant_id]
         if status:
             where += " AND status = %s"
             params.append(status)
@@ -89,9 +90,10 @@ def get_case(case_id: str, current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
         cur.execute(
-            "SELECT * FROM policy_admin_queue WHERE id=%s",
-            (case_id,),
+            "SELECT * FROM policy_admin_queue WHERE id=%s AND tenant_id = %s",
+            (case_id, tenant_id),
         )
         row = cur.fetchone()
         cur.close()
@@ -114,10 +116,10 @@ def assign_case(body: AssignRequest, current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
         cur.execute(
-            "UPDATE policy_admin_queue SET status='IN_REVIEW' "
-            "WHERE id=%s",
-            (body.case_id,),
+            "UPDATE policy_admin_queue SET status='IN_REVIEW' WHERE id=%s AND tenant_id = %s",
+            (body.case_id, tenant_id),
         )
         conn.commit()
         cur.close()
@@ -144,10 +146,10 @@ def decide_case(body: DecideRequest, current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
         cur.execute(
-            "UPDATE policy_admin_queue SET outcome=%s, risk_class=%s, status='PROCESSED', "
-            "processed_at=now() WHERE id=%s",
-            (body.outcome, body.risk_class, body.case_id),
+            "UPDATE policy_admin_queue SET outcome=%s, risk_class=%s, status='PROCESSED', processed_at=now() WHERE id=%s AND tenant_id = %s",
+            (body.outcome, body.risk_class, body.case_id, tenant_id),
         )
         conn.commit()
         cur.close()

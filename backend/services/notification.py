@@ -316,6 +316,7 @@ def send_decision_email(
     premium: Optional[float] = None,
     risk_class: Optional[str] = None,
     premium_detail: dict | None = None,
+    tenant_id: str = "00000000-0000-0000-0000-000000000001",
 ) -> tuple[bool, str]:
     """Send decision notification email using letter_templates if available."""
     subject = "Underwriting Decision \u2014 " + applicant_ref + " \u2014 " + outcome.replace("_"," ")
@@ -382,8 +383,8 @@ def send_decision_email(
         _cur = conn.cursor()
         _cur.execute("""
             SELECT premium_mode, approved_premium FROM policy_admin_queue
-            WHERE applicant_ref=%s ORDER BY decision_date DESC LIMIT 1
-        """, (applicant_ref,))
+            WHERE applicant_ref=%s AND tenant_id = %s ORDER BY decision_date DESC LIMIT 1
+        """, (applicant_ref, tenant_id))
         _qrow = _cur.fetchone()
         _cur.close()
         if _qrow:

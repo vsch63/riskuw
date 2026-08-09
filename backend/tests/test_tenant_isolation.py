@@ -372,3 +372,93 @@ def test_analytics_summary_tenant_scoped(iso_tenants, client):
     # Sanity: the two tenants have distinct counts (3 vs 1), so a shared
     # unscoped count could never satisfy both assertions above.
     assert expected_a != expected_b
+
+
+# ── Decision-queue isolation (policy_admin_queue.tenant_id, V041) ───────────
+
+def test_queue_case_cross_tenant_invisible(iso_tenants, client):
+    """TC-TEN-008: a case in the decision queue belongs to one tenant — the
+    other tenant's /queue list never surfaces it and a direct id fetch 404s
+    (V041 scoped policy_admin_queue.tenant_id)."""
+    ha = _login(client, ADMIN_A)
+    hb = _login(client, ADMIN_B)
+    ta = iso_tenants["a"]
+
+    conn = _db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO policy_admin_queue
+                (applicant_ref, applicant_name, product_code, face_amount, age, gender,
+                 outcome, risk_class, net_debit_points, decision_date, tenant_id)
+            VALUES (%s, 'Queue Isolation Applicant', 'TST', 1000000, 35, 'M',
+                    'REFERRED', 'STANDARD', 25, now(), %s::uuid)
+            RETURNING id
+        """, (_ref("TISO-Q"), ta))
+        cid = cur.fetchone()["id"]
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    # A sees its own case via the legacy queue endpoint (returns a list)
+    r = client.get("/queue", headers=ha)
+    assert r.status_code == 200, r.text
+    ids = [str(it["id"]) for it in r.json() if isinstance(it, dict)]
+    assert str(cid) in ids, "Tenant A cannot see its own queue case"
+
+    # B's list never surfaces A's case
+    r = client.get("/queue", headers=hb)
+    assert r.status_code == 200, r.text
+    ids = [str(it["id"]) for it in r.json() if isinstance(it, dict)]
+    assert str(cid) not in ids, "Tenant B leaked Tenant A's queue case in list"
+
+    # B's direct fetch by id is a 404, not a 200
+    r = client.get(f"/queue/{cid}", headers=hb)
+    assert r.status_code == 404, "Cross-tenant queue case fetch must 404"
+
+    # A can still fetch it
+    assert client.get(f"/queue/{cid}", headers=ha).status_code == 200
+
+
+# ── Member-upload-log isolation (member_upload_log.tenant_id, V041) ─────────
+
+def test_member_upload_log_scoped(iso_tenants, client):
+    """TC-TEN-009: /members/upload-history returns only the caller's own
+    tenant's upload rows (V041 scoped member_upload_log.tenant_id)."""
+    ha = _login(client, ADMIN_A)
+    hb = _login(client, ADMIN_B)
+    ta, tb = iso_tenants["a"], iso_tenants["b"]
+
+    conn = _db()
+    try:
+        cur = conn.cursor()
+        suffix = uuid.uuid4().hex[:4].upper()
+        cur.execute("""
+            INSERT INTO member_upload_log
+                (upload_ref, filename, total_rows, inserted, updated,
+                 skipped, errors, uploaded_by, tenant_id)
+            VALUES (%s, %s, 1, 1, 0, 0, 0, %s, %s::uuid)
+        """, (f"TISO-UL-A-{suffix}", f"iso-a-{suffix}.csv", ADMIN_A, ta))
+        cur.execute("""
+            INSERT INTO member_upload_log
+                (upload_ref, filename, total_rows, inserted, updated,
+                 skipped, errors, uploaded_by, tenant_id)
+            VALUES (%s, %s, 1, 1, 0, 0, 0, %s, %s::uuid)
+        """, (f"TISO-UL-B-{suffix}", f"iso-b-{suffix}.csv", ADMIN_B, tb))
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    ra = client.get("/members/upload-history", headers=ha)
+    assert ra.status_code == 200, ra.text
+    a_refs = [r["upload_ref"] for r in ra.json()]
+    assert f"TISO-UL-A-{suffix}" in a_refs, "Tenant A missing its own upload log"
+    assert f"TISO-UL-B-{suffix}" not in a_refs, "Tenant A leaked Tenant B's upload log"
+
+    rb = client.get("/members/upload-history", headers=hb)
+    assert rb.status_code == 200, rb.text
+    b_refs = [r["upload_ref"] for r in rb.json()]
+    assert f"TISO-UL-B-{suffix}" in b_refs, "Tenant B missing its own upload log"
+    assert f"TISO-UL-A-{suffix}" not in b_refs, "Tenant B leaked Tenant A's upload log"

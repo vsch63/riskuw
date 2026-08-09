@@ -96,7 +96,8 @@ def check_sla_breaches(conn=None, *, tenant_id=None) -> int:
                   AND ca.sla_due_at IS NOT NULL
                   AND ca.sla_due_at < now()
                   AND ca.workbench_status NOT IN ('APPROVED','DECLINED','CLOSED')
-                """,
+                  AND pq.tenant_id = %s
+                """, (tenant_id,),
             )
             rows = cur.fetchall()
             for r in rows:

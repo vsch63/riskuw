@@ -109,12 +109,15 @@ def get_queue(
     try:
         cur = conn.cursor()
 
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
+
         # Auto-create assignment rows for any REFERRED cases not yet tracked
         cur.execute("""
             SELECT pq.id FROM policy_admin_queue pq
             LEFT JOIN case_assignments ca ON ca.case_ref_id = pq.id
             WHERE pq.outcome ILIKE '%%REFER%%' AND ca.id IS NULL
-        """)
+              AND pq.tenant_id = %s
+        """, (tenant_id,))
         new_ids = [r["id"] if hasattr(r, "keys") else r[0] for r in cur.fetchall()]
         for cid in new_ids:
             _ensure_assignment(cur, cid)
@@ -122,8 +125,8 @@ def get_queue(
             conn.commit()
 
         # Build filtered query
-        where = ["pq.outcome ILIKE '%%REFER%%'"]
-        params: list = []
+        where = ["pq.outcome ILIKE '%%REFER%%'", "pq.tenant_id = %s"]
+        params: list = [tenant_id]
         if status != "ALL":
             where.append("ca.workbench_status = %s")
             params.append(status)
@@ -188,6 +191,7 @@ def sla_dashboard(current: CurrentUser):
     try:
         cur = conn.cursor()
         now = datetime.now(timezone.utc)
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
 
         # Core counts + avg TAT
         cur.execute("""
@@ -204,7 +208,8 @@ def sla_dashboard(current: CurrentUser):
                     - pq.decision_date)) / 3600.0), 0) AS avg_tat_hours
             FROM case_assignments ca
             LEFT JOIN policy_admin_queue pq ON pq.id = ca.case_ref_id
-        """)
+            WHERE pq.tenant_id = %s
+        """, (tenant_id,))
         stats = _row(cur.fetchone())
 
         # Avg TAT by product (last 90 days, decided cases only)
@@ -217,9 +222,10 @@ def sla_dashboard(current: CurrentUser):
             JOIN policy_admin_queue pq ON pq.id = ca.case_ref_id
             WHERE ca.decided_at IS NOT NULL
               AND pq.decision_date >= now() - interval '90 days'
+              AND pq.tenant_id = %s
             GROUP BY pq.product_code
             ORDER BY avg_tat_hours DESC
-        """)
+        """, (tenant_id,))
         tat_by_product = [_row(r) for r in cur.fetchall()]
 
         # Breached queue (most overdue first)
@@ -231,9 +237,10 @@ def sla_dashboard(current: CurrentUser):
             JOIN policy_admin_queue pq ON pq.id = ca.case_ref_id
             WHERE ca.sla_due_at IS NOT NULL AND ca.sla_due_at < now()
               AND ca.workbench_status NOT IN ('APPROVED','DECLINED','CLOSED')
+              AND pq.tenant_id = %s
             ORDER BY ca.sla_due_at ASC
             LIMIT 100
-        """)
+        """, (tenant_id,))
         breached = []
         for r in cur.fetchall():
             d = _row(r)
@@ -267,8 +274,9 @@ def get_case_detail(case_id: int, current: CurrentUser):
     conn, release = _get_db()
     try:
         cur = conn.cursor()
+        tenant_id = current.tenant_id if current else "00000000-0000-0000-0000-000000000001"
 
-        cur.execute("SELECT * FROM policy_admin_queue WHERE id=%s", (case_id,))
+        cur.execute("SELECT * FROM policy_admin_queue WHERE id=%s AND tenant_id = %s", (case_id, tenant_id))
         case = cur.fetchone()
         if not case:
             raise HTTPException(404, "Case not found")
