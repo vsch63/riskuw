@@ -57,6 +57,23 @@ export const authAPI = {
   getUsers: () => api.get('/auth/users'),
 }
 
+// ─── SSO (OIDC + LDAP) ───────────────────────────────────────────
+export const ssoAPI = {
+  // Public — login page
+  providers: () => api.get('/auth/sso/providers'),
+  authorize: (providerCode: string) => api.get(`/auth/sso/${providerCode}/authorize`),
+
+  // Admin — provider config
+  listProviders: () => api.get('/auth/sso/admin/providers'),
+  upsertProvider: (payload: object) => api.post('/auth/sso/admin/providers', payload),
+  updateProvider: (code: string, payload: object) =>
+    api.patch(`/auth/sso/admin/providers/${code}`, payload),
+  deactivateProvider: (code: string) =>
+    api.delete(`/auth/sso/admin/providers/${code}`),
+  testProvider: (code: string) =>
+    api.post(`/auth/sso/admin/providers/${code}/test`),
+}
+
 // ─── Products ────────────────────────────────────────────────────
 export const productsAPI = {
   list: () => api.get('/products'),

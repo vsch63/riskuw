@@ -10,12 +10,13 @@ import {
   UploadOutlined, PlusOutlined, DeleteOutlined,
   KeyOutlined, WarningOutlined, EnvironmentOutlined,
   DollarOutlined, FileTextOutlined, EditOutlined,
-  CaretRightOutlined,
+  CaretRightOutlined, LockOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
 import { useAuthStore } from '../context/authStore'
 import PhysicianRegistryTab from './PhysicianRegistryTab'
 import { GSTModalConfigTab } from './GSTModalConfigTab'
+import SsoConfigTab from '../components/SsoConfigTab'
 import { Titled, CellHint } from '../components/ColHint'
 
 // ── sysApi: direct fetch helper for /system/* routes (not proxied via /api) ──
@@ -2785,6 +2786,24 @@ export default function SystemConfigPage() {
               key: 'user-labels',
               label: <span>🏷️ User Labels</span>,
               children: <UserLabelsTab/>,
+            },
+          ]}
+        />
+      ),
+    },
+    {
+      key: 'security',
+      label: <span><LockOutlined/> Security</span>,
+      children: (
+        <Tabs
+          defaultActiveKey="sso"
+          size="small"
+          tabBarStyle={{ background:'rgba(255,255,255,0.03)', borderRadius:8, padding:'4px 8px', marginBottom:20, border:'1px solid rgba(255,255,255,0.07)' }}
+          items={[
+            {
+              key: 'sso',
+              label: <span><LockOutlined/> SSO</span>,
+              children: <SsoConfigTab />,
             },
           ]}
         />

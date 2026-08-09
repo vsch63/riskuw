@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
-import { Form, Input, Button, Alert, message } from 'antd'
+import { Form, Input, Button, Alert, message, Space } from 'antd'
 import {
   UserOutlined, LockOutlined, SafetyOutlined, ArrowRightOutlined,
   ArrowLeftOutlined, MailOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
-import { authAPI } from '../api/client'
+import { authAPI, ssoAPI } from '../api/client'
 import { useAuthStore } from '../context/authStore'
 import type { AuthUser } from '../types'
 
@@ -133,7 +133,32 @@ export default function LoginPage() {
   const [mfaOtpUri, setMfaOtpUri] = useState('')
   const [enrollPhase, setEnrollPhase] = useState<'setup' | 'verify'>('setup')
 
+  // SSO provider buttons (from /auth/sso/providers — active providers only)
+  const [ssoProviders, setSsoProviders] = useState<{ provider_code: string; display_name: string }[]>([])
+  const [ssoLoading, setSsoLoading] = useState(false)
+
   useEffect(() => { setError('') }, [step])
+
+  // Load active SSO providers for the login card
+  useEffect(() => {
+    let cancelled = false
+    ssoAPI.providers()
+      .then((res) => { if (!cancelled) setSsoProviders(res.data ?? []) })
+      .catch(() => { /* no providers configured / unreachable — hide the section */ })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleSso = async (providerCode: string) => {
+    setSsoLoading(true); setError('')
+    try {
+      const res = await ssoAPI.authorize(providerCode)
+      window.location.href = res.data.authorize_url
+      // no return — the browser navigates to the IdP
+    } catch {
+      setSsoLoading(false)
+      setError('Could not start SSO sign-in. Please try again or use your password.')
+    }
+  }
 
   /* ── MFA enrollment: fetch secret on mount when enrollment required ── */
   useEffect(() => {
@@ -353,6 +378,29 @@ export default function LoginPage() {
             Continue
           </Button>
         </Form>
+
+        {ssoProviders.length > 0 && (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.2)' }} />
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', whiteSpace: 'nowrap' }}>
+                or sign in with SSO
+              </span>
+              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.2)' }} />
+            </div>
+            <Space direction="vertical" style={{ width: '100%' }} size={12}>
+              {ssoProviders.map((p) => (
+                <Button key={p.provider_code} size="large" block
+                  loading={ssoLoading}
+                  icon={<SafetyOutlined />}
+                  onClick={() => handleSso(p.provider_code)}
+                  style={{ height: 44, fontSize: 14 }}>
+                  Continue with {p.display_name}
+                </Button>
+              ))}
+            </Space>
+          </div>
+        )}
 
         <div style={{
           marginTop: 32, padding: '14px 16px',

@@ -11,6 +11,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
+      // SSO flows hit /auth/sso/... directly (redirect_uri and the JSON
+      // authorize endpoint are built by the backend on bare /auth paths).
+      '/auth': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     },
   },
 })

@@ -17,6 +17,7 @@ psycopg2-binary==2.9.10         # PostgreSQL adapter
 bcrypt==4.2.1
 python-jose[cryptography]==3.3.0  # JWT encode/decode
 pyotp==2.9.0                    # TOTP MFA
+ldap3==2.9.1                    # LDAP/AD bind + search (SSO)
 
 # ── Data validation ──────────────────────────────────────────────────────────
 pydantic[email]==2.10.3

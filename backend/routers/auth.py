@@ -101,6 +101,28 @@ async def login(body: LoginRequest, request: Request):
     conn, release = _get_db()
     ip = request.client.host if request.client else None
     try:
+        # ── SSO (LDAP) login ──────────────────────────────────────
+        # Corporate-directory credentials: bind against the LDAP provider and
+        # resolve (or JIT-provision) the RiskUW account. Lockout/MFA do not
+        # apply — the directory owns authentication and MFA policy here.
+        if body.sso_provider:
+            from services.sso import SSOError, ldap_authenticate, load_provider
+            try:
+                provider = load_provider(conn, body.sso_provider, active=True)
+                result = ldap_authenticate(provider, body.username, body.password, conn)
+            except SSOError as e:
+                raise HTTPException(status_code=e.status_code, detail=e.detail)
+            _update_last_login(conn, result["username"])
+            conn.commit()
+            return TokenResponse(
+                access_token=_make_token(result["username"], result["role"], result["tenant_id"]),
+                username=result["username"],
+                role=result["role"],
+                full_name=result.get("full_name"),
+                tenant_id=result.get("tenant_id"),
+                tenant_name=result.get("tenant_name"),
+            )
+
         cur = conn.cursor()
 
         # Check lockout

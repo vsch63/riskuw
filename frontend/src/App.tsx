@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './context/authStore'
 import { CurrencyProvider } from './context/CurrencyContext'
 import LoginPage from './pages/LoginPage'
+import SsoCallback from './pages/SsoCallback'
 import AppLayout from './components/AppLayout'
 import EvaluatePage from './pages/EvaluatePage'
 import DashboardPage from './pages/DashboardPage'
@@ -47,6 +48,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
+        <Route path="/sso/callback" element={<SsoCallback />} />
         <Route path="/" element={<RequireUW><AppLayout /></RequireUW>}>
           <Route index element={<DashboardPage />} />
           <Route path="evaluate"       element={<EvaluatePage />} />

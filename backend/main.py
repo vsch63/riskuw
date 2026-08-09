@@ -114,6 +114,7 @@ def health():
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 from routers.auth          import router as auth_router
+from routers.sso           import router as sso_router                    # ← SSO (OIDC + LDAP)
 from routers.products      import router as products_router
 from routers.underwriting  import router as uw_router
 from routers.queue         import router as queue_router
@@ -138,6 +139,7 @@ from routers.sar_config       import router as sar_config_router            # �
 from routers.medical_standards import router as medical_standards_router    # ← MEDICAL STANDARDS (Phase 2)
 
 app.include_router(auth_router)
+app.include_router(sso_router)
 app.include_router(products_router)
 app.include_router(uw_router)
 app.include_router(queue_router)

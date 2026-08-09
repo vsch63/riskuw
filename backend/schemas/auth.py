@@ -10,6 +10,9 @@ import re
 class LoginRequest(BaseModel):
     username: str
     password: str
+    # When set, authenticate against this LDAP sso_provider instead of the
+    # local password store (corporate-directory login).
+    sso_provider: str | None = None
 
 class MFAVerifyRequest(BaseModel):
     totp_code: str
