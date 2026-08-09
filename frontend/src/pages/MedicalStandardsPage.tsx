@@ -13,7 +13,7 @@ import {
   message, Space, Card, Typography, Tag, Alert,
 } from 'antd'
 import { ReloadOutlined, SaveOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
-import { medicalStandardsAPI } from '../api/client'
+import { medicalStandardsAPI, productsAPI } from '../api/client'
 import { Titled } from '../components/ColHint'
 
 const { Text } = Typography
@@ -69,6 +69,7 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 
 export default function MedicalStandardsPage({ embedded = false }: { embedded?: boolean }) {
   const [standards, setStandards] = useState<Standard[]>([])
+  const [products, setProducts] = useState<{ product_code: string; product_name: string; is_active: boolean }[]>([])
   const [loading, setLoading] = useState(false)
   const [productScope, setProductScope] = useState<string>('')
   const [draft, setDraft] = useState<StandardDraft | null>(null)
@@ -89,6 +90,18 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
   }, [productScope])
 
   useEffect(() => { load() }, [load])
+
+  // Product list for the scope / override dropdowns (blank = system level).
+  useEffect(() => {
+    productsAPI.list()
+      .then((r) => setProducts(r.data || []))
+      .catch(() => { /* non-fatal — dropdowns just stay empty */ })
+  }, [])
+
+  const productOptions = products.map((p) => ({
+    value: p.product_code,
+    label: `${p.product_code} — ${p.product_name}${p.is_active ? '' : ' (inactive)'}`,
+  }))
 
   const openAdd = () => {
     setDraft({ code: '', family: '', name: '', category: 'BUILD', isNew: true })
@@ -195,12 +208,12 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
             <Select
               placeholder="Scope: system defaults"
               allowClear
-              style={{ width: 260 }}
+              style={{ width: 280 }}
               value={productScope || undefined}
               onChange={(v) => setProductScope(v || '')}
-              options={[]}
+              options={productOptions}
               showSearch
-              onSearch={(q) => setProductScope(q)}
+              optionFilterProp="label"
             />
             <Button icon={<ReloadOutlined />} onClick={load}>Reload</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>New Standard</Button>
@@ -251,8 +264,16 @@ export default function MedicalStandardsPage({ embedded = false }: { embedded?: 
           </Space>
           <Space wrap>
             <Text type="secondary">Product override (optional):</Text>
-            <Input value={saveScope} onChange={(e) => setSaveScope(e.target.value)}
-                   placeholder="leave blank = system level" style={{ width: 260 }} />
+            <Select
+              placeholder="None — system level"
+              allowClear
+              style={{ width: 320 }}
+              value={saveScope || undefined}
+              onChange={(v) => setSaveScope(v || '')}
+              options={productOptions}
+              showSearch
+              optionFilterProp="label"
+            />
           </Space>
 
           {rules.map((rule) => (
