@@ -107,6 +107,7 @@ export const formulaAPI = {
 // ─── SAR Config (V026) ───────────────────────────────────────────
 export const sarConfigAPI = {
   listBenefits: () => api.get('/sar-config/benefits'),
+  benefitOptions: () => api.get('/sar-config/benefit-options'),
   upsertBenefit: (payload: object) => api.post('/sar-config/benefits', payload),
   benefitVersions: (benefitCode: string) => api.get('/sar-config/benefits/versions', { params: { benefit_code: benefitCode } }),
   listRiskGroups: () => api.get('/sar-config/risk-groups'),

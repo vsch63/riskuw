@@ -239,6 +239,43 @@ def list_benefits(current: CurrentUser = CurrentUser):
         release(conn)
 
 
+@router.get("/benefit-options")
+def list_benefit_options(current: CurrentUser = CurrentUser):
+    """Dropdown source for the Benefit tab's "Benefit / Product Code" field.
+
+    Union of the two Product-Config sources a SAR benefit can attach to:
+      * products.product_code            — base plans (benefit_type BASE)
+      * product_benefit_config.rider_product_code — compatible riders
+
+    A typed code can silently create a phantom benefit (a SAR row with no
+    backing product), so the UI must present these instead of free text.
+    products has no canonical tenant_id (V001) — mirror list_products' unscoped
+    read rather than reference the dev-only column.
+    """
+    conn, release = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT product_code AS benefit_code, product_name, 'BASE' AS benefit_type
+            FROM products
+            WHERE is_active = true
+            UNION
+            SELECT pbc.rider_product_code, COALESCE(p.product_name, pbc.rider_product_code),
+                   pbc.benefit_type
+            FROM product_benefit_config pbc
+            LEFT JOIN products p ON p.product_code = pbc.rider_product_code
+            WHERE pbc.tenant_id = %s::uuid AND pbc.is_active = true
+            ORDER BY benefit_code
+            """,
+            (current.tenant_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        return rows
+    finally:
+        release(conn)
+
+
 @router.get("/benefits/versions")
 def list_benefit_versions(benefit_code: str, current: CurrentUser = CurrentUser):
     """Full version history for one benefit code — every version with its

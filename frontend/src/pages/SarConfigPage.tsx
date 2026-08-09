@@ -13,7 +13,7 @@
 // ══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from 'react'
 import {
-  Table, Button, Modal, Form, Input, Select, InputNumber, Switch,
+  Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm,
   message, Tag, Space, Tabs, Card, Typography, Alert,
 } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
@@ -55,6 +55,9 @@ function BenefitsTab({ notify }: { notify: () => void }) {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [options, setOptions] = useState<any[]>([])
+  const [optionsLoading, setOptionsLoading] = useState(true)
   const [hist, setHist] = useState<{ code: string; versions: any[] } | null>(null)
   const [histLoading, setHistLoading] = useState(false)
   const [form] = Form.useForm()
@@ -67,14 +70,41 @@ function BenefitsTab({ notify }: { notify: () => void }) {
     } catch (e: any) { message.error(e.message) }
     finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
+
+  // Dropdown source = union of products (BASE) + product_benefit_config riders,
+  // so a typed code can't create a phantom SAR benefit with no backing product.
+  const loadOptions = async () => {
+    setOptionsLoading(true)
+    try {
+      const { data } = await sarConfigAPI.benefitOptions()
+      setOptions(data || [])
+    } catch (e: any) { message.error(e.message) }
+    finally { setOptionsLoading(false) }
+  }
+  useEffect(() => { load(); loadOptions() }, [])
+
+  const openModal = (r?: any) => {
+    setEditing(r || null)
+    form.resetFields()
+    if (r) form.setFieldsValue(r)
+    setOpen(true)
+  }
 
   const save = async () => {
     const v = await form.validateFields()
     try {
       await sarConfigAPI.upsertBenefit(v)
       message.success('Benefit config saved — new version created')
-      setOpen(false); form.resetFields(); load(); notify()
+      setOpen(false); setEditing(null); form.resetFields(); load(); notify()
+    } catch (e: any) { message.error(e.message) }
+  }
+
+  // Soft delete via append-versioning: new inactive version supersedes the current one.
+  const deactivate = async (r: any) => {
+    try {
+      await sarConfigAPI.upsertBenefit({ ...r, is_active: false })
+      message.success(`Benefit ${r.benefit_code} deactivated — new inactive version created`)
+      load(); notify()
     } catch (e: any) { message.error(e.message) }
   }
 
@@ -102,18 +132,39 @@ function BenefitsTab({ notify }: { notify: () => void }) {
     { title: Titled('Effective', 'effective_date'), dataIndex: 'effective_date', width: 105, render: (v: string) => <span style={mono}>{v || 'today'}</span> },
     { title: 'History', key: 'hist', width: 90, render: (_: any, r: any) =>
         <Button size="small" type="link" onClick={() => showHistory(r.benefit_code)}>History</Button> },
+    { title: 'Actions', key: 'act', width: 150, render: (_: any, r: any) => (
+        <Space size={0}>
+          <Button size="small" type="link" onClick={() => openModal(r)}>Edit</Button>
+          <Popconfirm
+            title={`Deactivate benefit ${r.benefit_code}?`}
+            description="Creates a new inactive version — the current one stops applying."
+            okText="Deactivate" okButtonProps={{ danger: true }}
+            onConfirm={() => deactivate(r)}
+            disabled={!r.is_active}
+          >
+            <Button size="small" type="link" danger disabled={!r.is_active}>Deactivate</Button>
+          </Popconfirm>
+        </Space>
+    ) },
   ]
 
   return (
     <div style={card}>
       <Space style={{ marginBottom: 12 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>New / Edit Benefit</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>New Benefit</Button>
       </Space>
       <Table size="small" rowKey="benefit_code" dataSource={rows} columns={cols} loading={loading} pagination={{ pageSize: 12 }} />
-      <Modal title="Benefit SAR Config" open={open} onOk={save} onCancel={() => setOpen(false)} width={620} destroyOnClose>
+      <Modal title={editing ? `Edit Benefit · ${editing.benefit_code}` : 'New Benefit'} open={open} onOk={save} onCancel={() => { setEditing(null); setOpen(false) }} width={620}>
         <Form form={form} layout="vertical" initialValues={{ benefit_type: 'BASE', risk_type: 'MORTALITY', premium_payer: 'ANY', include_in_sar: true, sar_formula: 'FACE_AMOUNT', processing_sequence: 0, is_active: true }}>
           <Space style={{ width: '100%' }} wrap>
-            <Form.Item name="benefit_code" label="Benefit / Product Code" rules={[{ required: true }]}><Input style={{ width: 220 }} /></Form.Item>
+            <Form.Item name="benefit_code" label="Benefit / Product Code" rules={[{ required: true }]}
+              tooltip="Pick an existing benefit from Product Config. Free text could create a phantom SAR benefit with no backing product — on edit the code is locked.">
+              <Select
+                style={{ width: 260 }} showSearch disabled={!!editing} loading={optionsLoading}
+                placeholder="Search benefit / product code…" optionFilterProp="children"
+                options={options.map(o => ({ value: o.benefit_code, label: `${o.benefit_code} — ${o.product_name ?? o.benefit_code} (${o.benefit_type})` }))}
+              />
+            </Form.Item>
             <Form.Item name="benefit_type" label="Type"><Select style={{ width: 140 }}>
               {['BASE', 'RIDER_CI', 'RIDER_ADB', 'RIDER_ATPD', 'RIDER_WOP'].map(t => <Option key={t} value={t}>{t}</Option>)}
             </Select></Form.Item>
